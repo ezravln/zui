@@ -6,19 +6,19 @@
 #include <zui/icon.h>
 
 typedef struct ZuiIconSource {
-    unsigned char *raster_data;
-    int raster_width;
-    int raster_height;
-    float native_size;
+  unsigned char *raster_data;
+  int raster_width;
+  int raster_height;
+  float native_size;
 } ZuiIconSource;
 
 struct ZuiIcon {
-    ZuiWidget base;
-    ZuiIconSource *source;
-    ZuiTexture texture;
-    ZuiColor tint;
-    float size;
-    bool texture_dirty;
+  ZuiWidget base;
+  ZuiIconSource *source;
+  ZuiTexture texture;
+  ZuiColor tint;
+  float size;
+  bool texture_dirty;
 };
 
 ZuiIconSource *zui_icon_source_create(void);

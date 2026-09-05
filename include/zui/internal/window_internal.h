@@ -8,39 +8,40 @@
 typedef struct ZuiImage ZuiImage;
 
 struct ZuiTitlebar {
-    ZuiWidget base;
-    ZuiWidget *start_container;
-    ZuiWidget *center_container;
-    ZuiWidget *end_container;
-    ZuiImage *logo;
-    float height;
+  ZuiWidget base;
+  ZuiWidget *start_container;
+  ZuiWidget *center_container;
+  ZuiWidget *end_container;
+  ZuiImage *logo;
+  float height;
 };
 
 struct ZuiWindow {
-    ZuiWidget base;
-    ZuiWaylandWindow wayland;
-    ZuiEglSurface egl_surface;
+  ZuiWidget base;
+  ZuiWaylandWindow wayland;
+  ZuiEglSurface egl_surface;
 
-    ZuiTitlebar *titlebar;
-    ZuiWidget *content;
+  ZuiTitlebar *titlebar;
+  ZuiWidget *content;
+  ZuiWidget *focused;
 
-    char *title;
-    int width;
-    int height;
-    int min_width;
-    int min_height;
-    int max_width;
-    int max_height;
-    float corner_radius;
-    ZuiColor background_color;
-    ZuiColor border_color;
-    float border_width;
+  char *title;
+  int width;
+  int height;
+  int min_width;
+  int min_height;
+  int max_width;
+  int max_height;
+  float corner_radius;
+  ZuiColor background_color;
+  ZuiColor border_color;
+  float border_width;
 
-    bool running;
-    bool maximized;
-    bool active;
-    bool needs_redraw;
-    bool frame_pending;
+  bool running;
+  bool maximized;
+  bool active;
+  bool needs_redraw;
+  bool frame_pending;
 };
 
 ZuiWaylandWindow *zui_window_get_wayland(ZuiWindow *window);
@@ -48,7 +49,10 @@ void zui_window_handle_resize(ZuiWindow *window, int width, int height);
 void zui_window_handle_motion(ZuiWindow *window, double x, double y);
 void zui_window_handle_button(ZuiWindow *window, double x, double y,
                                uint32_t button, bool pressed);
-void zui_window_handle_key(ZuiWindow *window, uint32_t key, bool pressed);
+void zui_window_handle_key(ZuiWindow *window, uint32_t key, uint32_t sym,
+                            const char *text, bool pressed);
+void zui_window_handle_scroll(ZuiWindow *window, double x, double y,
+                               double dx, double dy);
 void zui_window_request_close(ZuiWindow *window);
 void zui_window_set_maximized_state(ZuiWindow *window, bool maximized);
 void zui_window_set_active_state(ZuiWindow *window, bool active);

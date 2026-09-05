@@ -7,13 +7,13 @@
 #include <wayland-egl.h>
 
 typedef struct ZuiEglContext {
-    EGLDisplay display;
-    EGLContext context;
-    EGLConfig config;
+  EGLDisplay display;
+  EGLContext context;
+  EGLConfig config;
 } ZuiEglContext;
 
 typedef struct ZuiEglSurface {
-    EGLSurface surface;
+  EGLSurface surface;
 } ZuiEglSurface;
 
 bool zui_egl_init(ZuiEglContext *ctx, struct wl_display *wl_display);
@@ -25,5 +25,7 @@ void zui_egl_surface_destroy(ZuiEglContext *ctx, ZuiEglSurface *surface);
 
 void zui_egl_make_current(ZuiEglContext *ctx, ZuiEglSurface *surface);
 void zui_egl_swap_buffers(ZuiEglContext *ctx, ZuiEglSurface *surface);
+void zui_egl_query_surface_size(ZuiEglContext *ctx, ZuiEglSurface *surface,
+                                 int *width, int *height);
 
 #endif

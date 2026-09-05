@@ -4,14 +4,14 @@
 typedef struct ZuiWidget ZuiWidget;
 
 typedef enum ZuiLayoutDir {
-    ZUI_LAYOUT_HORIZONTAL,
-    ZUI_LAYOUT_VERTICAL,
+  ZUI_LAYOUT_HORIZONTAL,
+  ZUI_LAYOUT_VERTICAL,
 } ZuiLayoutDir;
 
 typedef enum ZuiAlign {
-    ZUI_ALIGN_START,
-    ZUI_ALIGN_CENTER,
-    ZUI_ALIGN_END,
+  ZUI_ALIGN_START,
+  ZUI_ALIGN_CENTER,
+  ZUI_ALIGN_END,
 } ZuiAlign;
 
 void zui_widget_add_child(ZuiWidget *parent, ZuiWidget *child);

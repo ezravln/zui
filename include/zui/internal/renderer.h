@@ -9,36 +9,36 @@
 #define ZUI_MAX_CLIP_STACK 16
 
 typedef struct ZuiRect {
-    float x, y, w, h;
+  float x, y, w, h;
 } ZuiRect;
 
 typedef struct ZuiClipState {
-    ZuiRect rect;
-    float radius;
+  ZuiRect rect;
+  float radius;
 } ZuiClipState;
 
 typedef struct ZuiTexture {
-    GLuint id;
-    int width;
-    int height;
+  GLuint id;
+  int width;
+  int height;
 } ZuiTexture;
 
 typedef struct ZuiRenderer {
-    GLuint rect_shader;
-    GLuint rect_vao;
-    GLuint rect_vbo;
+  GLuint rect_shader;
+  GLuint rect_vao;
+  GLuint rect_vbo;
 
-    GLuint tex_shader;
-    GLuint tex_vao;
-    GLuint tex_vbo;
+  GLuint tex_shader;
+  GLuint tex_vao;
+  GLuint tex_vbo;
 
-    GLuint glyph_shader;
+  GLuint glyph_shader;
 
-    int viewport_width;
-    int viewport_height;
+  int viewport_width;
+  int viewport_height;
 
-    ZuiClipState clip_stack[ZUI_MAX_CLIP_STACK];
-    int clip_stack_top;
+  ZuiClipState clip_stack[ZUI_MAX_CLIP_STACK];
+  int clip_stack_top;
 } ZuiRenderer;
 
 bool zui_renderer_init(ZuiRenderer *renderer, const char *shader_path);
@@ -60,6 +60,7 @@ void zui_renderer_draw_rounded_rect_outline(ZuiRenderer *renderer, ZuiRect rect,
                                              float thickness);
 
 ZuiTexture zui_texture_create(const uint8_t *data, int width, int height);
+ZuiTexture zui_texture_load(const char *path);
 void zui_texture_destroy(ZuiTexture *texture);
 void zui_renderer_draw_texture(ZuiRenderer *renderer, ZuiTexture *texture,
                                 ZuiRect rect, ZuiColor tint);
