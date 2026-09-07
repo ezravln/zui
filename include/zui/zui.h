@@ -8,5 +8,6 @@
 #include "icon.h"
 #include "font.h"
 #include "image.h"
+#include "video.h"
 
 #endif

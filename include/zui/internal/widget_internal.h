@@ -16,6 +16,7 @@ typedef enum ZuiCornerMode {
 
 typedef struct ZuiWidgetVTable {
   void (*draw)(ZuiWidget *widget, ZuiRenderer *renderer);
+  void (*draw_overlay)(ZuiWidget *widget, ZuiRenderer *renderer);
   void (*layout)(ZuiWidget *widget);
   void (*destroy)(ZuiWidget *widget);
   bool (*hit_test)(ZuiWidget *widget, float x, float y);

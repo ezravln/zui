@@ -19,6 +19,18 @@ typedef struct ZuiSplitView ZuiSplitView;
 typedef struct ZuiRadioGroup ZuiRadioGroup;
 typedef struct ZuiRadioButton ZuiRadioButton;
 typedef struct ZuiTextInput ZuiTextInput;
+typedef struct ZuiSlider ZuiSlider;
+typedef struct ZuiDropdown ZuiDropdown;
+typedef struct ZuiProgressBar ZuiProgressBar;
+typedef struct ZuiGridView ZuiGridView;
+typedef struct ZuiMenuBar ZuiMenuBar;
+typedef struct ZuiMenu ZuiMenu;
+typedef struct ZuiMenuItem ZuiMenuItem;
+typedef struct ZuiPieChart ZuiPieChart;
+typedef struct ZuiBarChart ZuiBarChart;
+typedef struct ZuiLineChart ZuiLineChart;
+typedef struct ZuiCircularProgress ZuiCircularProgress;
+typedef struct ZuiVideo ZuiVideo;
 
 #include <zui/color.h>
 #include <zui/layout.h>
@@ -52,6 +64,18 @@ typedef enum ZuiWidgetType {
   ZUI_WIDGET_SPLITVIEW,
   ZUI_WIDGET_RADIOBUTTON,
   ZUI_WIDGET_TEXTINPUT,
+  ZUI_WIDGET_SLIDER,
+  ZUI_WIDGET_DROPDOWN,
+  ZUI_WIDGET_PROGRESSBAR,
+  ZUI_WIDGET_GRIDVIEW,
+  ZUI_WIDGET_MENUBAR,
+  ZUI_WIDGET_MENU,
+  ZUI_WIDGET_MENUITEM,
+  ZUI_WIDGET_PIE_CHART,
+  ZUI_WIDGET_BAR_CHART,
+  ZUI_WIDGET_LINE_CHART,
+  ZUI_WIDGET_CIRCULAR_PROGRESS,
+  ZUI_WIDGET_VIDEO,
 } ZuiWidgetType;
 
 typedef enum ZuiSplitAnchor {
@@ -71,5 +95,10 @@ typedef void (*ZuiRadioCallback)(ZuiRadioGroup *group, ZuiRadioButton *selected,
                                   void *user_data);
 typedef void (*ZuiTextInputCallback)(ZuiTextInput *input, const char *text,
                                       void *user_data);
+typedef void (*ZuiSliderCallback)(ZuiSlider *slider, float value,
+                                   void *user_data);
+typedef void (*ZuiDropdownCallback)(ZuiDropdown *dropdown, int index,
+                                     const char *item, void *user_data);
+typedef void (*ZuiMenuItemCallback)(ZuiMenuItem *item, void *user_data);
 
 #endif

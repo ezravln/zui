@@ -6,6 +6,7 @@
 #include <zui/internal/wayland_platform.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -20,6 +21,9 @@ static ZuiFont *get_default_font(void);
 extern void zui_window_close(ZuiWindow *window);
 extern void zui_window_minimize(ZuiWindow *window);
 extern void zui_window_maximize(ZuiWindow *window);
+extern void zui_window_set_overlay(ZuiWindow *window, ZuiWidget *widget);
+extern void zui_window_clear_overlay(ZuiWindow *window, ZuiWidget *widget);
+extern void zui_window_mark_needs_redraw(ZuiWindow *window);
 
 struct ZuiButton {
   ZuiWidget base;
@@ -2682,4 +2686,2486 @@ ZuiWidget *zui_window_hide_button(ZuiWindow *window)
 
   zui_button_on_click(&btn->base, hide_button_click, window);
   return (ZuiWidget *)btn;
+}
+
+struct ZuiSlider {
+  ZuiWidget base;
+  float min_value;
+  float max_value;
+  float value;
+  bool dragging;
+  ZuiColor track_color;
+  ZuiColor fill_color;
+  ZuiColor thumb_color;
+  ZuiColor thumb_hover_color;
+  ZuiColor thumb_drag_color;
+  float thumb_radius;
+  ZuiSliderCallback on_change;
+  void *change_user_data;
+};
+
+static void slider_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiSlider *sl = (ZuiSlider *)widget;
+
+  float track_height = 6.0f;
+  float track_y = widget->bounds.y + (widget->bounds.height - track_height) / 2;
+  float track_radius = track_height / 2;
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x, track_y, widget->bounds.width, track_height),
+    sl->track_color, track_radius);
+
+  float range = sl->max_value - sl->min_value;
+  float ratio = range > 0 ? (sl->value - sl->min_value) / range : 0;
+  float fill_width = widget->bounds.width * ratio;
+
+  if (fill_width > 0) {
+    zui_renderer_draw_rounded_rect(renderer,
+      ZUI_RECT(widget->bounds.x, track_y, fill_width, track_height),
+      sl->fill_color, track_radius);
+  }
+
+  float thumb_x = widget->bounds.x + fill_width;
+  float thumb_y = widget->bounds.y + widget->bounds.height / 2;
+
+  ZuiColor thumb_color = sl->thumb_color;
+  if (sl->dragging) {
+    thumb_color = sl->thumb_drag_color;
+  } else if (widget->hovered) {
+    thumb_color = sl->thumb_hover_color;
+  }
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(thumb_x - sl->thumb_radius, thumb_y - sl->thumb_radius,
+             sl->thumb_radius * 2, sl->thumb_radius * 2),
+    thumb_color, sl->thumb_radius);
+}
+
+static bool slider_hit_test(ZuiWidget *widget, float x, float y)
+{
+  (void)widget;
+  (void)x;
+  (void)y;
+  return true;
+}
+
+static void slider_update_value(ZuiSlider *sl, float x)
+{
+  float ratio = (x - sl->base.bounds.x) / sl->base.bounds.width;
+  if (ratio < 0) ratio = 0;
+  if (ratio > 1) ratio = 1;
+
+  float new_value = sl->min_value + ratio * (sl->max_value - sl->min_value);
+  if (new_value != sl->value) {
+    sl->value = new_value;
+    if (sl->on_change) {
+      sl->on_change(sl, sl->value, sl->change_user_data);
+    }
+  }
+}
+
+static void slider_on_mouse_down(ZuiWidget *widget, float x, float y,
+                                  uint32_t button)
+{
+  (void)y;
+  if (button != BTN_LEFT) return;
+
+  ZuiSlider *sl = (ZuiSlider *)widget;
+  sl->dragging = true;
+  slider_update_value(sl, x);
+}
+
+static void slider_on_mouse_up(ZuiWidget *widget, float x, float y,
+                                uint32_t button)
+{
+  (void)x;
+  (void)y;
+  if (button != BTN_LEFT) return;
+
+  ZuiSlider *sl = (ZuiSlider *)widget;
+  sl->dragging = false;
+}
+
+static void slider_on_mouse_move(ZuiWidget *widget, float x, float y)
+{
+  (void)y;
+  ZuiSlider *sl = (ZuiSlider *)widget;
+  if (!sl->dragging) return;
+
+  slider_update_value(sl, x);
+}
+
+static void slider_destroy(ZuiWidget *widget)
+{
+  (void)widget;
+}
+
+static const ZuiWidgetVTable slider_vtable = {
+  .draw = slider_draw,
+  .hit_test = slider_hit_test,
+  .on_mouse_down = slider_on_mouse_down,
+  .on_mouse_up = slider_on_mouse_up,
+  .on_mouse_move = slider_on_mouse_move,
+  .destroy = slider_destroy,
+};
+
+ZuiSlider *zui_slider_create(float min, float max, float value)
+{
+  ZuiSlider *sl = (ZuiSlider *)zui_widget_create(
+    sizeof(ZuiSlider), ZUI_WIDGET_SLIDER, &slider_vtable);
+  if (!sl) return NULL;
+
+  sl->min_value = min;
+  sl->max_value = max;
+  sl->value = value;
+  sl->dragging = false;
+
+  sl->track_color = ZUI_COLOR_HEX(0x3d3d3d);
+  sl->fill_color = ZUI_COLOR_HEX(0x4a9eff);
+  sl->thumb_color = ZUI_COLOR_HEX(0xffffff);
+  sl->thumb_hover_color = ZUI_COLOR_HEX(0xe0e0e0);
+  sl->thumb_drag_color = ZUI_COLOR_HEX(0x4a9eff);
+  sl->thumb_radius = 8.0f;
+
+  sl->on_change = NULL;
+  sl->change_user_data = NULL;
+
+  sl->base.cursor = ZUI_CURSOR_POINTER;
+  sl->base.preferred_size.width = 200.0f;
+  sl->base.preferred_size.height = 24.0f;
+
+  return sl;
+}
+
+void zui_slider_set_value(ZuiSlider *slider, float value)
+{
+  if (!slider) return;
+  if (value < slider->min_value) value = slider->min_value;
+  if (value > slider->max_value) value = slider->max_value;
+  slider->value = value;
+}
+
+float zui_slider_get_value(ZuiSlider *slider)
+{
+  if (!slider) return 0.0f;
+  return slider->value;
+}
+
+void zui_slider_set_range(ZuiSlider *slider, float min, float max)
+{
+  if (!slider) return;
+  slider->min_value = min;
+  slider->max_value = max;
+  if (slider->value < min) slider->value = min;
+  if (slider->value > max) slider->value = max;
+}
+
+void zui_slider_set_size(ZuiSlider *slider, float width, float height)
+{
+  if (!slider) return;
+  slider->base.preferred_size.width = width;
+  slider->base.preferred_size.height = height;
+}
+
+void zui_slider_set_colors(ZuiSlider *slider, ZuiColor track, ZuiColor fill,
+                            ZuiColor thumb)
+{
+  if (!slider) return;
+  slider->track_color = track;
+  slider->fill_color = fill;
+  slider->thumb_color = thumb;
+  slider->thumb_hover_color = ZUI_COLOR(thumb.r * 0.9f, thumb.g * 0.9f,
+                                         thumb.b * 0.9f, thumb.a);
+  slider->thumb_drag_color = fill;
+}
+
+void zui_slider_on_change(ZuiSlider *slider, ZuiSliderCallback callback,
+                           void *user_data)
+{
+  if (!slider) return;
+  slider->on_change = callback;
+  slider->change_user_data = user_data;
+}
+
+ZuiWidget *zui_slider_as_widget(ZuiSlider *slider)
+{
+  return (ZuiWidget *)slider;
+}
+
+#define ZUI_DROPDOWN_MAX_ITEMS 64
+
+struct ZuiDropdown {
+  ZuiWidget base;
+  char *placeholder;
+  char *items[ZUI_DROPDOWN_MAX_ITEMS];
+  size_t item_count;
+  int selected_index;
+  bool open;
+  int hover_index;
+  ZuiFont *font;
+  ZuiColor bg_color;
+  ZuiColor text_color;
+  ZuiColor placeholder_color;
+  ZuiColor border_color;
+  ZuiColor hover_color;
+  ZuiColor item_bg_color;
+  float corner_radius;
+  float padding;
+  float item_height;
+  ZuiDropdownCallback on_change;
+  void *change_user_data;
+  ZuiIconSource *chevron_down_icon;
+  ZuiIconSource *chevron_up_icon;
+  ZuiTexture chevron_down_texture;
+  ZuiTexture chevron_up_texture;
+  float icon_size;
+};
+
+static void dropdown_draw_popup(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+
+  if (!dd->open || dd->item_count == 0) return;
+
+  float text_x = widget->bounds.x + dd->padding;
+  float text_h = dd->font ? zui_font_text_height(dd->font, "Ay") : 14.0f;
+  float list_y = widget->bounds.y + widget->bounds.height + 2;
+  float list_height = dd->item_height * (float)dd->item_count;
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x, list_y,
+             widget->bounds.width, list_height + 4),
+    dd->border_color, dd->corner_radius);
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x + 1, list_y + 1,
+             widget->bounds.width - 2, list_height + 2),
+    dd->item_bg_color, dd->corner_radius - 1);
+
+  for (size_t i = 0; i < dd->item_count; i++) {
+    float item_y = list_y + 2 + dd->item_height * (float)i;
+
+    if ((int)i == dd->hover_index) {
+      zui_renderer_draw_rect(renderer,
+        ZUI_RECT(widget->bounds.x + 2, item_y,
+                 widget->bounds.width - 4, dd->item_height),
+        dd->hover_color);
+    }
+
+    if (dd->font && dd->items[i]) {
+      float item_text_y = item_y + (dd->item_height - text_h) / 2;
+      ZuiColor item_color = ((int)i == dd->selected_index)
+                            ? dd->text_color
+                            : ZUI_COLOR(dd->text_color.r * 0.8f,
+                                        dd->text_color.g * 0.8f,
+                                        dd->text_color.b * 0.8f,
+                                        dd->text_color.a);
+      zui_font_render_text(dd->font, renderer, text_x, item_text_y,
+                            dd->items[i], item_color);
+    }
+  }
+}
+
+static void dropdown_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+
+  ZuiColor border = dd->border_color;
+  if (dd->open || widget->hovered) {
+    border = ZUI_COLOR(border.r * 1.5f, border.g * 1.5f, border.b * 1.5f, border.a);
+  }
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x, widget->bounds.y,
+             widget->bounds.width, widget->bounds.height),
+    border, dd->corner_radius);
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x + 1, widget->bounds.y + 1,
+             widget->bounds.width - 2, widget->bounds.height - 2),
+    dd->bg_color, dd->corner_radius - 1);
+
+  float text_x = widget->bounds.x + dd->padding;
+  float text_h = dd->font ? zui_font_text_height(dd->font, "Ay") : 14.0f;
+  float text_y = widget->bounds.y + (widget->bounds.height - text_h) / 2;
+
+  const char *display_text = NULL;
+  ZuiColor text_color = dd->placeholder_color;
+
+  if (dd->selected_index >= 0 && dd->selected_index < (int)dd->item_count) {
+    display_text = dd->items[dd->selected_index];
+    text_color = dd->text_color;
+  } else if (dd->placeholder) {
+    display_text = dd->placeholder;
+  }
+
+  if (display_text && dd->font) {
+    zui_font_render_text(dd->font, renderer, text_x, text_y,
+                          display_text, text_color);
+  }
+
+  ZuiTexture *icon_tex = dd->open ? &dd->chevron_up_texture : &dd->chevron_down_texture;
+  if (icon_tex && icon_tex->id) {
+    float icon_x = widget->bounds.x + widget->bounds.width - dd->padding - dd->icon_size;
+    float icon_y = widget->bounds.y + (widget->bounds.height - dd->icon_size) / 2;
+    zui_renderer_draw_texture(renderer, icon_tex,
+      ZUI_RECT(icon_x, icon_y, dd->icon_size, dd->icon_size),
+      dd->text_color);
+  }
+}
+
+static bool dropdown_hit_test(ZuiWidget *widget, float x, float y)
+{
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+
+  if (dd->open) {
+    float list_y = widget->bounds.y + widget->bounds.height + 2;
+    float list_height = dd->item_height * (float)dd->item_count + 4;
+
+    if (x >= widget->bounds.x && x < widget->bounds.x + widget->bounds.width &&
+        y >= list_y && y < list_y + list_height) {
+      return true;
+    }
+  }
+
+  return true;
+}
+
+static void dropdown_on_mouse_down(ZuiWidget *widget, float x, float y,
+                                    uint32_t button)
+{
+  if (button != BTN_LEFT) return;
+
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+  ZuiWindow *window = (ZuiWindow *)find_parent_window_widget(widget);
+
+  if (dd->open) {
+    float list_y = widget->bounds.y + widget->bounds.height + 2;
+
+    if (y >= list_y && dd->item_count > 0) {
+      int index = (int)((y - list_y - 2) / dd->item_height);
+      if (index >= 0 && index < (int)dd->item_count) {
+        dd->selected_index = index;
+        if (dd->on_change) {
+          dd->on_change(dd, index, dd->items[index], dd->change_user_data);
+        }
+      }
+    }
+    dd->open = false;
+    if (window) {
+      zui_window_clear_overlay(window, widget);
+      zui_window_mark_needs_redraw(window);
+    }
+  } else {
+    dd->open = true;
+    if (window) {
+      zui_window_set_overlay(window, widget);
+      zui_window_mark_needs_redraw(window);
+    }
+  }
+}
+
+static void dropdown_on_mouse_move(ZuiWidget *widget, float x, float y)
+{
+  (void)x;
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+
+  if (!dd->open) {
+    dd->hover_index = -1;
+    return;
+  }
+
+  float list_y = widget->bounds.y + widget->bounds.height + 2;
+  int old_hover = dd->hover_index;
+
+  if (y >= list_y && dd->item_count > 0) {
+    int index = (int)((y - list_y - 2) / dd->item_height);
+    if (index >= 0 && index < (int)dd->item_count) {
+      dd->hover_index = index;
+    } else {
+      dd->hover_index = -1;
+    }
+  } else {
+    dd->hover_index = -1;
+  }
+
+  if (dd->hover_index != old_hover) {
+    ZuiWindow *window = (ZuiWindow *)find_parent_window_widget(widget);
+    if (window) {
+      zui_window_mark_needs_redraw(window);
+    }
+  }
+}
+
+static void dropdown_on_mouse_leave(ZuiWidget *widget)
+{
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+  dd->hover_index = -1;
+}
+
+static void dropdown_on_focus(ZuiWidget *widget, bool focused)
+{
+  if (!focused) {
+    ZuiDropdown *dd = (ZuiDropdown *)widget;
+    if (dd->open) {
+      dd->open = false;
+      ZuiWindow *window = (ZuiWindow *)find_parent_window_widget(widget);
+      if (window) {
+        zui_window_clear_overlay(window, widget);
+        zui_window_mark_needs_redraw(window);
+      }
+    }
+  }
+}
+
+static void dropdown_destroy(ZuiWidget *widget)
+{
+  ZuiDropdown *dd = (ZuiDropdown *)widget;
+  free(dd->placeholder);
+  for (size_t i = 0; i < dd->item_count; i++) {
+    free(dd->items[i]);
+  }
+  if (dd->chevron_down_texture.id) {
+    zui_texture_destroy(&dd->chevron_down_texture);
+  }
+  if (dd->chevron_up_texture.id) {
+    zui_texture_destroy(&dd->chevron_up_texture);
+  }
+  if (dd->chevron_down_icon) {
+    zui_icon_source_destroy(dd->chevron_down_icon);
+  }
+  if (dd->chevron_up_icon) {
+    zui_icon_source_destroy(dd->chevron_up_icon);
+  }
+}
+
+static const ZuiWidgetVTable dropdown_vtable = {
+  .draw = dropdown_draw,
+  .draw_overlay = dropdown_draw_popup,
+  .hit_test = dropdown_hit_test,
+  .on_mouse_down = dropdown_on_mouse_down,
+  .on_mouse_move = dropdown_on_mouse_move,
+  .on_mouse_leave = dropdown_on_mouse_leave,
+  .on_focus = dropdown_on_focus,
+  .destroy = dropdown_destroy,
+};
+
+ZuiDropdown *zui_dropdown_create(const char *placeholder)
+{
+  ZuiDropdown *dd = (ZuiDropdown *)zui_widget_create(
+    sizeof(ZuiDropdown), ZUI_WIDGET_DROPDOWN, &dropdown_vtable);
+  if (!dd) return NULL;
+
+  dd->placeholder = placeholder ? strdup(placeholder) : NULL;
+  dd->item_count = 0;
+  dd->selected_index = -1;
+  dd->open = false;
+  dd->hover_index = -1;
+  dd->font = get_default_font();
+
+  dd->bg_color = ZUI_COLOR_HEX(0x1a1a1a);
+  dd->text_color = ZUI_COLOR_HEX(0xffffff);
+  dd->placeholder_color = ZUI_COLOR_HEX(0x666666);
+  dd->border_color = ZUI_COLOR_HEX(0x444444);
+  dd->hover_color = ZUI_COLOR_HEX(0x3d3d3d);
+  dd->item_bg_color = ZUI_COLOR_HEX(0x2d2d2d);
+  dd->corner_radius = 6.0f;
+  dd->padding = 10.0f;
+  dd->item_height = 32.0f;
+  dd->icon_size = 12.0f;
+
+  dd->chevron_down_icon = zui_icon_load_svg("assets/icons/x-chevron-down.svg");
+  dd->chevron_up_icon = zui_icon_load_svg("assets/icons/x-chevron-up.svg");
+
+  if (dd->chevron_down_icon) {
+    dd->chevron_down_texture = zui_texture_create(
+      dd->chevron_down_icon->raster_data,
+      dd->chevron_down_icon->raster_width,
+      dd->chevron_down_icon->raster_height);
+  }
+  if (dd->chevron_up_icon) {
+    dd->chevron_up_texture = zui_texture_create(
+      dd->chevron_up_icon->raster_data,
+      dd->chevron_up_icon->raster_width,
+      dd->chevron_up_icon->raster_height);
+  }
+
+  dd->on_change = NULL;
+  dd->change_user_data = NULL;
+
+  dd->base.cursor = ZUI_CURSOR_POINTER;
+  dd->base.preferred_size.width = 200.0f;
+  dd->base.preferred_size.height = 36.0f;
+
+  return dd;
+}
+
+void zui_dropdown_add_item(ZuiDropdown *dropdown, const char *item)
+{
+  if (!dropdown || !item) return;
+  if (dropdown->item_count >= ZUI_DROPDOWN_MAX_ITEMS) return;
+
+  dropdown->items[dropdown->item_count] = strdup(item);
+  dropdown->item_count++;
+}
+
+void zui_dropdown_clear_items(ZuiDropdown *dropdown)
+{
+  if (!dropdown) return;
+
+  for (size_t i = 0; i < dropdown->item_count; i++) {
+    free(dropdown->items[i]);
+  }
+  dropdown->item_count = 0;
+  dropdown->selected_index = -1;
+}
+
+void zui_dropdown_set_selected(ZuiDropdown *dropdown, int index)
+{
+  if (!dropdown) return;
+  if (index < -1 || index >= (int)dropdown->item_count) return;
+  dropdown->selected_index = index;
+}
+
+int zui_dropdown_get_selected(ZuiDropdown *dropdown)
+{
+  if (!dropdown) return -1;
+  return dropdown->selected_index;
+}
+
+const char *zui_dropdown_get_selected_item(ZuiDropdown *dropdown)
+{
+  if (!dropdown) return NULL;
+  if (dropdown->selected_index < 0 ||
+      dropdown->selected_index >= (int)dropdown->item_count) {
+    return NULL;
+  }
+  return dropdown->items[dropdown->selected_index];
+}
+
+void zui_dropdown_set_size(ZuiDropdown *dropdown, float width, float height)
+{
+  if (!dropdown) return;
+  dropdown->base.preferred_size.width = width;
+  dropdown->base.preferred_size.height = height;
+}
+
+void zui_dropdown_set_colors(ZuiDropdown *dropdown, ZuiColor background,
+                              ZuiColor text, ZuiColor border)
+{
+  if (!dropdown) return;
+  dropdown->bg_color = background;
+  dropdown->text_color = text;
+  dropdown->border_color = border;
+}
+
+void zui_dropdown_on_change(ZuiDropdown *dropdown, ZuiDropdownCallback callback,
+                             void *user_data)
+{
+  if (!dropdown) return;
+  dropdown->on_change = callback;
+  dropdown->change_user_data = user_data;
+}
+
+ZuiWidget *zui_dropdown_as_widget(ZuiDropdown *dropdown)
+{
+  return (ZuiWidget *)dropdown;
+}
+
+struct ZuiProgressBar {
+  ZuiWidget base;
+  float value;
+  ZuiColor track_color;
+  ZuiColor fill_color;
+  float corner_radius;
+};
+
+static void progressbar_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiProgressBar *pb = (ZuiProgressBar *)widget;
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x, widget->bounds.y,
+             widget->bounds.width, widget->bounds.height),
+    pb->track_color, pb->corner_radius);
+
+  float fill_width = widget->bounds.width * pb->value;
+  if (fill_width > 0) {
+    zui_renderer_draw_rounded_rect(renderer,
+      ZUI_RECT(widget->bounds.x, widget->bounds.y,
+               fill_width, widget->bounds.height),
+      pb->fill_color, pb->corner_radius);
+  }
+}
+
+static void progressbar_destroy(ZuiWidget *widget)
+{
+  (void)widget;
+}
+
+static const ZuiWidgetVTable progressbar_vtable = {
+  .draw = progressbar_draw,
+  .destroy = progressbar_destroy,
+};
+
+ZuiProgressBar *zui_progressbar_create(void)
+{
+  ZuiProgressBar *pb = (ZuiProgressBar *)zui_widget_create(
+    sizeof(ZuiProgressBar), ZUI_WIDGET_PROGRESSBAR, &progressbar_vtable);
+  if (!pb) return NULL;
+
+  pb->value = 0.0f;
+  pb->track_color = ZUI_COLOR_HEX(0x3d3d3d);
+  pb->fill_color = ZUI_COLOR_HEX(0x4a9eff);
+  pb->corner_radius = 4.0f;
+
+  pb->base.preferred_size.width = 200.0f;
+  pb->base.preferred_size.height = 8.0f;
+
+  return pb;
+}
+
+void zui_progressbar_set_value(ZuiProgressBar *bar, float value)
+{
+  if (!bar) return;
+  if (value < 0) value = 0;
+  if (value > 1) value = 1;
+  bar->value = value;
+}
+
+float zui_progressbar_get_value(ZuiProgressBar *bar)
+{
+  if (!bar) return 0.0f;
+  return bar->value;
+}
+
+void zui_progressbar_set_size(ZuiProgressBar *bar, float width, float height)
+{
+  if (!bar) return;
+  bar->base.preferred_size.width = width;
+  bar->base.preferred_size.height = height;
+}
+
+void zui_progressbar_set_colors(ZuiProgressBar *bar, ZuiColor track,
+                                 ZuiColor fill)
+{
+  if (!bar) return;
+  bar->track_color = track;
+  bar->fill_color = fill;
+}
+
+void zui_progressbar_set_corner_radius(ZuiProgressBar *bar, float radius)
+{
+  if (!bar) return;
+  bar->corner_radius = radius;
+}
+
+ZuiWidget *zui_progressbar_as_widget(ZuiProgressBar *bar)
+{
+  return (ZuiWidget *)bar;
+}
+
+/* ========== GridView ========== */
+
+#define ZUI_GRIDVIEW_MAX_CHILDREN 256
+
+struct ZuiGridView {
+  ZuiWidget base;
+  ZuiWidget *children[ZUI_GRIDVIEW_MAX_CHILDREN];
+  size_t child_count;
+  int columns;
+  float cell_width;
+  float cell_height;
+  float gap_x;
+  float gap_y;
+  float padding;
+  float scroll_x;
+  float scroll_y;
+  float content_width;
+  float content_height;
+  ZuiColor bg_color;
+};
+
+static void gridview_layout_children(ZuiGridView *gv)
+{
+  ZuiWidget *widget = (ZuiWidget *)gv;
+  if (gv->child_count == 0 || gv->columns <= 0) return;
+
+  float available_width = widget->bounds.width - gv->padding * 2;
+  float cw = gv->cell_width;
+  float ch = gv->cell_height;
+
+  if (cw <= 0) {
+    cw = (available_width - gv->gap_x * (gv->columns - 1)) / gv->columns;
+  }
+  if (ch <= 0) {
+    ch = cw;
+  }
+
+  int rows = ((int)gv->child_count + gv->columns - 1) / gv->columns;
+  gv->content_width = gv->columns * cw + (gv->columns - 1) * gv->gap_x + gv->padding * 2;
+  gv->content_height = rows * ch + (rows - 1) * gv->gap_y + gv->padding * 2;
+
+  float max_scroll_x = gv->content_width - widget->bounds.width;
+  float max_scroll_y = gv->content_height - widget->bounds.height;
+  if (max_scroll_x < 0) max_scroll_x = 0;
+  if (max_scroll_y < 0) max_scroll_y = 0;
+
+  if (gv->scroll_x > max_scroll_x) gv->scroll_x = max_scroll_x;
+  if (gv->scroll_y > max_scroll_y) gv->scroll_y = max_scroll_y;
+  if (gv->scroll_x < 0) gv->scroll_x = 0;
+  if (gv->scroll_y < 0) gv->scroll_y = 0;
+
+  for (size_t i = 0; i < gv->child_count; i++) {
+    int col = (int)i % gv->columns;
+    int row = (int)i / gv->columns;
+
+    float x = widget->bounds.x + gv->padding + col * (cw + gv->gap_x) - gv->scroll_x;
+    float y = widget->bounds.y + gv->padding + row * (ch + gv->gap_y) - gv->scroll_y;
+
+    zui_widget_set_bounds(gv->children[i], x, y, cw, ch);
+    zui_widget_layout(gv->children[i]);
+  }
+}
+
+static void gridview_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiGridView *gv = (ZuiGridView *)widget;
+
+  if (gv->bg_color.a > 0) {
+    zui_renderer_draw_rounded_rect(renderer,
+      ZUI_RECT(widget->bounds.x, widget->bounds.y,
+               widget->bounds.width, widget->bounds.height),
+      gv->bg_color, widget->corner_radius);
+  }
+
+  zui_renderer_push_clip(renderer,
+    ZUI_RECT(widget->bounds.x, widget->bounds.y,
+             widget->bounds.width, widget->bounds.height),
+    widget->corner_radius);
+
+  for (size_t i = 0; i < gv->child_count; i++) {
+    ZuiWidget *child = gv->children[i];
+    if (child && child->visible) {
+      float cx = child->bounds.x;
+      float cy = child->bounds.y;
+      float cw = child->bounds.width;
+      float ch = child->bounds.height;
+
+      bool visible = (cx + cw > widget->bounds.x) &&
+                     (cx < widget->bounds.x + widget->bounds.width) &&
+                     (cy + ch > widget->bounds.y) &&
+                     (cy < widget->bounds.y + widget->bounds.height);
+
+      if (visible) {
+        zui_widget_draw(child, renderer);
+      }
+    }
+  }
+
+  zui_renderer_pop_clip(renderer);
+}
+
+static void gridview_layout(ZuiWidget *widget)
+{
+  ZuiGridView *gv = (ZuiGridView *)widget;
+  gridview_layout_children(gv);
+}
+
+static bool gridview_hit_test(ZuiWidget *widget, float x, float y)
+{
+  (void)widget;
+  (void)x;
+  (void)y;
+  return true;
+}
+
+static ZuiWidget *gridview_hit_test_children(ZuiWidget *widget, float x, float y)
+{
+  ZuiGridView *gv = (ZuiGridView *)widget;
+
+  for (int i = (int)gv->child_count - 1; i >= 0; i--) {
+    ZuiWidget *child = gv->children[i];
+    if (child && child->visible) {
+      ZuiWidget *hit = zui_widget_hit_test(child, x, y);
+      if (hit) return hit;
+    }
+  }
+  return NULL;
+}
+
+static void gridview_on_scroll(ZuiWidget *widget, double dx, double dy)
+{
+  ZuiGridView *gv = (ZuiGridView *)widget;
+
+  gv->scroll_x += (float)dx;
+  gv->scroll_y += (float)dy;
+
+  float max_scroll_x = gv->content_width - widget->bounds.width;
+  float max_scroll_y = gv->content_height - widget->bounds.height;
+  if (max_scroll_x < 0) max_scroll_x = 0;
+  if (max_scroll_y < 0) max_scroll_y = 0;
+
+  if (gv->scroll_x > max_scroll_x) gv->scroll_x = max_scroll_x;
+  if (gv->scroll_y > max_scroll_y) gv->scroll_y = max_scroll_y;
+  if (gv->scroll_x < 0) gv->scroll_x = 0;
+  if (gv->scroll_y < 0) gv->scroll_y = 0;
+
+  widget->needs_layout = true;
+}
+
+static void gridview_destroy(ZuiWidget *widget)
+{
+  ZuiGridView *gv = (ZuiGridView *)widget;
+  for (size_t i = 0; i < gv->child_count; i++) {
+    if (gv->children[i]) {
+      zui_widget_destroy(gv->children[i]);
+    }
+  }
+}
+
+static const ZuiWidgetVTable gridview_vtable = {
+  .draw = gridview_draw,
+  .layout = gridview_layout,
+  .hit_test = gridview_hit_test,
+  .hit_test_children = gridview_hit_test_children,
+  .on_scroll = gridview_on_scroll,
+  .destroy = gridview_destroy,
+};
+
+ZuiGridView *zui_gridview_create(int columns)
+{
+  ZuiGridView *gv = (ZuiGridView *)zui_widget_create(
+    sizeof(ZuiGridView), ZUI_WIDGET_GRIDVIEW, &gridview_vtable);
+  if (!gv) return NULL;
+
+  gv->child_count = 0;
+  gv->columns = columns > 0 ? columns : 3;
+  gv->cell_width = 0;
+  gv->cell_height = 0;
+  gv->gap_x = 8.0f;
+  gv->gap_y = 8.0f;
+  gv->padding = 8.0f;
+  gv->scroll_x = 0;
+  gv->scroll_y = 0;
+  gv->content_width = 0;
+  gv->content_height = 0;
+  gv->bg_color = ZUI_COLOR(0, 0, 0, 0);
+
+  gv->base.preferred_size.width = 300.0f;
+  gv->base.preferred_size.height = 200.0f;
+
+  return gv;
+}
+
+void zui_gridview_set_columns(ZuiGridView *gv, int columns)
+{
+  if (gv && columns > 0) {
+    gv->columns = columns;
+    gv->base.needs_layout = true;
+  }
+}
+
+void zui_gridview_set_size(ZuiGridView *gv, float width, float height)
+{
+  if (gv) {
+    gv->base.preferred_size.width = width;
+    gv->base.preferred_size.height = height;
+    gv->base.needs_layout = true;
+  }
+}
+
+void zui_gridview_set_cell_size(ZuiGridView *gv, float width, float height)
+{
+  if (gv) {
+    gv->cell_width = width;
+    gv->cell_height = height;
+    gv->base.needs_layout = true;
+  }
+}
+
+void zui_gridview_set_gap(ZuiGridView *gv, float gap_x, float gap_y)
+{
+  if (gv) {
+    gv->gap_x = gap_x;
+    gv->gap_y = gap_y;
+    gv->base.needs_layout = true;
+  }
+}
+
+void zui_gridview_set_padding(ZuiGridView *gv, float padding)
+{
+  if (gv) {
+    gv->padding = padding;
+    gv->base.needs_layout = true;
+  }
+}
+
+void zui_gridview_set_background(ZuiGridView *gv, ZuiColor color)
+{
+  if (gv) {
+    gv->bg_color = color;
+  }
+}
+
+void zui_gridview_add_child(ZuiGridView *gv, ZuiWidget *child)
+{
+  if (!gv || !child) return;
+  if (gv->child_count >= ZUI_GRIDVIEW_MAX_CHILDREN) return;
+
+  gv->children[gv->child_count++] = child;
+  child->parent = (ZuiWidget *)gv;
+  gv->base.needs_layout = true;
+}
+
+void zui_gridview_remove_child(ZuiGridView *gv, ZuiWidget *child)
+{
+  if (!gv || !child) return;
+
+  for (size_t i = 0; i < gv->child_count; i++) {
+    if (gv->children[i] == child) {
+      child->parent = NULL;
+      for (size_t j = i; j < gv->child_count - 1; j++) {
+        gv->children[j] = gv->children[j + 1];
+      }
+      gv->child_count--;
+      gv->base.needs_layout = true;
+      break;
+    }
+  }
+}
+
+void zui_gridview_clear(ZuiGridView *gv)
+{
+  if (!gv) return;
+
+  for (size_t i = 0; i < gv->child_count; i++) {
+    if (gv->children[i]) {
+      gv->children[i]->parent = NULL;
+      zui_widget_destroy(gv->children[i]);
+      gv->children[i] = NULL;
+    }
+  }
+  gv->child_count = 0;
+  gv->scroll_x = 0;
+  gv->scroll_y = 0;
+  gv->base.needs_layout = true;
+}
+
+void zui_gridview_scroll_to(ZuiGridView *gv, float x, float y)
+{
+  if (gv) {
+    gv->scroll_x = x;
+    gv->scroll_y = y;
+    gv->base.needs_layout = true;
+  }
+}
+
+void zui_gridview_get_scroll(ZuiGridView *gv, float *x, float *y)
+{
+  if (gv) {
+    if (x) *x = gv->scroll_x;
+    if (y) *y = gv->scroll_y;
+  }
+}
+
+ZuiWidget *zui_gridview_as_widget(ZuiGridView *gv)
+{
+  return (ZuiWidget *)gv;
+}
+
+/* ========== MenuItem ========== */
+
+struct ZuiMenuItem {
+  ZuiWidget base;
+  char *label;
+  char *shortcut;
+  bool enabled;
+  bool is_separator;
+  ZuiFont *font;
+  ZuiColor text_color;
+  ZuiColor hover_color;
+  ZuiColor disabled_color;
+  ZuiMenuItemCallback on_click_cb;
+  void *click_user_data;
+  ZuiIconSource *icon_source;
+  ZuiTexture icon_texture;
+  float icon_size;
+};
+
+static void menuitem_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiMenuItem *item = (ZuiMenuItem *)widget;
+
+  if (item->is_separator) {
+    float y = widget->bounds.y + widget->bounds.height / 2;
+    zui_renderer_draw_rect(renderer,
+      ZUI_RECT(widget->bounds.x + 8, y, widget->bounds.width - 16, 1),
+      ZUI_COLOR_HEX(0x444444));
+    return;
+  }
+
+  if (widget->hovered && item->enabled) {
+    zui_renderer_draw_rect(renderer,
+      ZUI_RECT(widget->bounds.x, widget->bounds.y,
+               widget->bounds.width, widget->bounds.height),
+      item->hover_color);
+  }
+
+  ZuiColor text_col = item->enabled ? item->text_color : item->disabled_color;
+
+  float text_x = widget->bounds.x + 12;
+
+  if (item->icon_texture.id) {
+    float icon_y = widget->bounds.y + (widget->bounds.height - item->icon_size) / 2;
+    zui_renderer_draw_texture(renderer, &item->icon_texture,
+      ZUI_RECT(text_x, icon_y, item->icon_size, item->icon_size),
+      text_col);
+    text_x += item->icon_size + 8;
+  }
+
+  if (item->font && item->label) {
+    float text_h = zui_font_text_height(item->font, "Ay");
+    float text_y = widget->bounds.y + (widget->bounds.height - text_h) / 2;
+    zui_font_render_text(item->font, renderer, text_x, text_y, item->label, text_col);
+  }
+
+  if (item->font && item->shortcut) {
+    float text_h = zui_font_text_height(item->font, "Ay");
+    float text_y = widget->bounds.y + (widget->bounds.height - text_h) / 2;
+    float shortcut_w = zui_font_text_width(item->font, item->shortcut);
+    zui_font_render_text(item->font, renderer,
+      widget->bounds.x + widget->bounds.width - shortcut_w - 12, text_y,
+      item->shortcut, ZUI_COLOR_HEX(0x888888));
+  }
+}
+
+static void menuitem_destroy(ZuiWidget *widget)
+{
+  ZuiMenuItem *item = (ZuiMenuItem *)widget;
+  free(item->label);
+  free(item->shortcut);
+  if (item->icon_texture.id) {
+    zui_texture_destroy(&item->icon_texture);
+  }
+  if (item->icon_source) {
+    zui_icon_source_destroy(item->icon_source);
+  }
+}
+
+static const ZuiWidgetVTable menuitem_vtable = {
+  .draw = menuitem_draw,
+  .destroy = menuitem_destroy,
+};
+
+ZuiMenuItem *zui_menuitem_create(const char *label)
+{
+  ZuiMenuItem *item = (ZuiMenuItem *)zui_widget_create(
+    sizeof(ZuiMenuItem), ZUI_WIDGET_MENUITEM, &menuitem_vtable);
+  if (!item) return NULL;
+
+  item->label = label ? strdup(label) : NULL;
+  item->shortcut = NULL;
+  item->enabled = true;
+  item->is_separator = false;
+  item->font = get_default_font();
+  item->text_color = ZUI_COLOR_HEX(0xffffff);
+  item->hover_color = ZUI_COLOR_HEX(0x3d3d3d);
+  item->disabled_color = ZUI_COLOR_HEX(0x666666);
+  item->on_click_cb = NULL;
+  item->click_user_data = NULL;
+  item->icon_source = NULL;
+  item->icon_texture = (ZuiTexture){0};
+  item->icon_size = 16.0f;
+
+  item->base.preferred_size.width = 150.0f;
+  item->base.preferred_size.height = 28.0f;
+
+  return item;
+}
+
+static ZuiMenuItem *menuitem_create_separator(void)
+{
+  ZuiMenuItem *item = (ZuiMenuItem *)zui_widget_create(
+    sizeof(ZuiMenuItem), ZUI_WIDGET_MENUITEM, &menuitem_vtable);
+  if (!item) return NULL;
+
+  item->label = NULL;
+  item->shortcut = NULL;
+  item->enabled = false;
+  item->is_separator = true;
+  item->font = NULL;
+
+  item->base.preferred_size.width = 150.0f;
+  item->base.preferred_size.height = 9.0f;
+
+  return item;
+}
+
+void zui_menuitem_set_label(ZuiMenuItem *item, const char *label)
+{
+  if (!item) return;
+  free(item->label);
+  item->label = label ? strdup(label) : NULL;
+}
+
+void zui_menuitem_set_shortcut(ZuiMenuItem *item, const char *shortcut)
+{
+  if (!item) return;
+  free(item->shortcut);
+  item->shortcut = shortcut ? strdup(shortcut) : NULL;
+}
+
+void zui_menuitem_set_enabled(ZuiMenuItem *item, bool enabled)
+{
+  if (item) item->enabled = enabled;
+}
+
+void zui_menuitem_on_click(ZuiMenuItem *item, ZuiMenuItemCallback callback,
+                            void *user_data)
+{
+  if (!item) return;
+  item->on_click_cb = callback;
+  item->click_user_data = user_data;
+}
+
+void zui_menuitem_set_icon(ZuiMenuItem *item, const char *icon_path, float size)
+{
+  if (!item || !icon_path) return;
+
+  if (item->icon_texture.id) {
+    zui_texture_destroy(&item->icon_texture);
+  }
+  if (item->icon_source) {
+    zui_icon_source_destroy(item->icon_source);
+  }
+
+  item->icon_source = zui_icon_load_svg(icon_path);
+  if (item->icon_source) {
+    item->icon_texture = zui_texture_create(item->icon_source->raster_data,
+                                             item->icon_source->raster_width,
+                                             item->icon_source->raster_height);
+  }
+  item->icon_size = size > 0 ? size : 16.0f;
+}
+
+ZuiWidget *zui_menuitem_as_widget(ZuiMenuItem *item)
+{
+  return (ZuiWidget *)item;
+}
+
+/* ========== Menu ========== */
+
+#define ZUI_MENU_MAX_ITEMS 32
+
+struct ZuiMenu {
+  ZuiWidget base;
+  char *title;
+  ZuiMenuItem *items[ZUI_MENU_MAX_ITEMS];
+  size_t item_count;
+  bool open;
+  int hover_index;
+  ZuiFont *font;
+  ZuiColor text_color;
+  ZuiColor bg_color;
+  ZuiColor hover_bg_color;
+  ZuiColor popup_bg_color;
+  ZuiColor border_color;
+  float popup_width;
+};
+
+static void menu_draw_popup(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiMenu *menu = (ZuiMenu *)widget;
+  if (!menu->open || menu->item_count == 0) return;
+
+  float popup_x = widget->bounds.x;
+  float popup_y = widget->bounds.y + widget->bounds.height;
+  float popup_h = 0;
+
+  for (size_t i = 0; i < menu->item_count; i++) {
+    popup_h += menu->items[i]->base.preferred_size.height;
+  }
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(popup_x, popup_y, menu->popup_width, popup_h + 8),
+    menu->border_color, 4.0f);
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(popup_x + 1, popup_y + 1, menu->popup_width - 2, popup_h + 6),
+    menu->popup_bg_color, 3.0f);
+
+  float item_y = popup_y + 4;
+  for (size_t i = 0; i < menu->item_count; i++) {
+    ZuiMenuItem *item = menu->items[i];
+    zui_widget_set_bounds((ZuiWidget *)item,
+      popup_x + 1, item_y, menu->popup_width - 2,
+      item->base.preferred_size.height);
+
+    item->base.hovered = ((int)i == menu->hover_index);
+    zui_widget_draw((ZuiWidget *)item, renderer);
+
+    item_y += item->base.preferred_size.height;
+  }
+}
+
+static void menu_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiMenu *menu = (ZuiMenu *)widget;
+
+  if (widget->hovered || menu->open) {
+    zui_renderer_draw_rect(renderer,
+      ZUI_RECT(widget->bounds.x, widget->bounds.y,
+               widget->bounds.width, widget->bounds.height),
+      menu->hover_bg_color);
+  }
+
+  if (menu->font && menu->title) {
+    float text_h = zui_font_text_height(menu->font, "Ay");
+    float text_y = widget->bounds.y + (widget->bounds.height - text_h) / 2;
+    zui_font_render_text(menu->font, renderer,
+      widget->bounds.x + 12, text_y, menu->title, menu->text_color);
+  }
+}
+
+static bool menu_hit_test(ZuiWidget *widget, float x, float y)
+{
+  ZuiMenu *menu = (ZuiMenu *)widget;
+
+  if (menu->open && menu->item_count > 0) {
+    float popup_x = widget->bounds.x;
+    float popup_y = widget->bounds.y + widget->bounds.height;
+    float popup_h = 8;
+    for (size_t i = 0; i < menu->item_count; i++) {
+      popup_h += menu->items[i]->base.preferred_size.height;
+    }
+
+    if (x >= popup_x && x < popup_x + menu->popup_width &&
+        y >= popup_y && y < popup_y + popup_h) {
+      return true;
+    }
+  }
+
+  return true;
+}
+
+static void menu_on_mouse_down(ZuiWidget *widget, float x, float y,
+                                uint32_t button)
+{
+  if (button != BTN_LEFT) return;
+
+  ZuiMenu *menu = (ZuiMenu *)widget;
+  ZuiWindow *window = (ZuiWindow *)find_parent_window_widget(widget);
+
+  if (menu->open) {
+    float popup_y = widget->bounds.y + widget->bounds.height;
+
+    if (y >= popup_y && menu->item_count > 0) {
+      float item_y = popup_y + 4;
+      for (size_t i = 0; i < menu->item_count; i++) {
+        ZuiMenuItem *item = menu->items[i];
+        float item_h = item->base.preferred_size.height;
+
+        if (y >= item_y && y < item_y + item_h) {
+          if (item->enabled && !item->is_separator && item->on_click_cb) {
+            item->on_click_cb(item, item->click_user_data);
+          }
+          break;
+        }
+        item_y += item_h;
+      }
+    }
+
+    menu->open = false;
+    menu->hover_index = -1;
+    if (window) {
+      zui_window_clear_overlay(window, widget);
+      zui_window_mark_needs_redraw(window);
+    }
+  } else {
+    menu->open = true;
+    if (window) {
+      zui_window_set_overlay(window, widget);
+      zui_window_mark_needs_redraw(window);
+    }
+  }
+}
+
+static void menu_on_mouse_move(ZuiWidget *widget, float x, float y)
+{
+  (void)x;
+  ZuiMenu *menu = (ZuiMenu *)widget;
+
+  if (!menu->open) {
+    menu->hover_index = -1;
+    return;
+  }
+
+  float popup_y = widget->bounds.y + widget->bounds.height;
+  int old_hover = menu->hover_index;
+  menu->hover_index = -1;
+
+  if (y >= popup_y && menu->item_count > 0) {
+    float item_y = popup_y + 4;
+    for (size_t i = 0; i < menu->item_count; i++) {
+      ZuiMenuItem *item = menu->items[i];
+      float item_h = item->base.preferred_size.height;
+
+      if (y >= item_y && y < item_y + item_h) {
+        if (!item->is_separator) {
+          menu->hover_index = (int)i;
+        }
+        break;
+      }
+      item_y += item_h;
+    }
+  }
+
+  if (menu->hover_index != old_hover) {
+    ZuiWindow *window = (ZuiWindow *)find_parent_window_widget(widget);
+    if (window) {
+      zui_window_mark_needs_redraw(window);
+    }
+  }
+}
+
+static void menu_on_mouse_leave(ZuiWidget *widget)
+{
+  ZuiMenu *menu = (ZuiMenu *)widget;
+  if (!menu->open) {
+    menu->hover_index = -1;
+  }
+}
+
+static void menu_on_focus(ZuiWidget *widget, bool focused)
+{
+  if (!focused) {
+    ZuiMenu *menu = (ZuiMenu *)widget;
+    if (menu->open) {
+      menu->open = false;
+      menu->hover_index = -1;
+      ZuiWindow *window = (ZuiWindow *)find_parent_window_widget(widget);
+      if (window) {
+        zui_window_clear_overlay(window, widget);
+        zui_window_mark_needs_redraw(window);
+      }
+    }
+  }
+}
+
+static void menu_destroy(ZuiWidget *widget)
+{
+  ZuiMenu *menu = (ZuiMenu *)widget;
+  free(menu->title);
+  for (size_t i = 0; i < menu->item_count; i++) {
+    zui_widget_destroy((ZuiWidget *)menu->items[i]);
+  }
+}
+
+static const ZuiWidgetVTable menu_vtable = {
+  .draw = menu_draw,
+  .draw_overlay = menu_draw_popup,
+  .hit_test = menu_hit_test,
+  .on_mouse_down = menu_on_mouse_down,
+  .on_mouse_move = menu_on_mouse_move,
+  .on_mouse_leave = menu_on_mouse_leave,
+  .on_focus = menu_on_focus,
+  .destroy = menu_destroy,
+};
+
+ZuiMenu *zui_menu_create(const char *title)
+{
+  ZuiMenu *menu = (ZuiMenu *)zui_widget_create(
+    sizeof(ZuiMenu), ZUI_WIDGET_MENU, &menu_vtable);
+  if (!menu) return NULL;
+
+  menu->title = title ? strdup(title) : NULL;
+  menu->item_count = 0;
+  menu->open = false;
+  menu->hover_index = -1;
+  menu->font = get_default_font();
+  menu->text_color = ZUI_COLOR_HEX(0xffffff);
+  menu->bg_color = ZUI_COLOR(0, 0, 0, 0);
+  menu->hover_bg_color = ZUI_COLOR_HEX(0x3d3d3d);
+  menu->popup_bg_color = ZUI_COLOR_HEX(0x252525);
+  menu->border_color = ZUI_COLOR_HEX(0x444444);
+  menu->popup_width = 180.0f;
+
+  float title_w = 60.0f;
+  if (menu->font && title) {
+    title_w = zui_font_text_width(menu->font, title) + 24;
+  }
+  menu->base.preferred_size.width = title_w;
+  menu->base.preferred_size.height = 28.0f;
+
+  return menu;
+}
+
+void zui_menu_set_title(ZuiMenu *menu, const char *title)
+{
+  if (!menu) return;
+  free(menu->title);
+  menu->title = title ? strdup(title) : NULL;
+
+  if (menu->font && title) {
+    menu->base.preferred_size.width = zui_font_text_width(menu->font, title) + 24;
+  }
+}
+
+void zui_menu_add_item(ZuiMenu *menu, ZuiMenuItem *item)
+{
+  if (!menu || !item) return;
+  if (menu->item_count >= ZUI_MENU_MAX_ITEMS) return;
+
+  menu->items[menu->item_count++] = item;
+  item->base.parent = (ZuiWidget *)menu;
+
+  float max_w = menu->popup_width;
+  if (item->font && item->label) {
+    float label_w = zui_font_text_width(item->font, item->label) + 24;
+    if (item->shortcut) {
+      label_w += zui_font_text_width(item->font, item->shortcut) + 24;
+    }
+    if (label_w > max_w) max_w = label_w;
+  }
+  menu->popup_width = max_w;
+}
+
+void zui_menu_add_separator(ZuiMenu *menu)
+{
+  if (!menu) return;
+  ZuiMenuItem *sep = menuitem_create_separator();
+  if (sep) {
+    zui_menu_add_item(menu, sep);
+  }
+}
+
+ZuiWidget *zui_menu_as_widget(ZuiMenu *menu)
+{
+  return (ZuiWidget *)menu;
+}
+
+/* ========== MenuBar ========== */
+
+#define ZUI_MENUBAR_MAX_MENUS 16
+
+struct ZuiMenuBar {
+  ZuiWidget base;
+  ZuiMenu *menus[ZUI_MENUBAR_MAX_MENUS];
+  size_t menu_count;
+  ZuiColor bg_color;
+  ZuiColor text_color;
+};
+
+static void menubar_layout(ZuiWidget *widget)
+{
+  ZuiMenuBar *bar = (ZuiMenuBar *)widget;
+
+  float x = widget->bounds.x;
+  for (size_t i = 0; i < bar->menu_count; i++) {
+    ZuiMenu *menu = bar->menus[i];
+    float menu_w = menu->base.preferred_size.width;
+    zui_widget_set_bounds((ZuiWidget *)menu,
+      x, widget->bounds.y, menu_w, widget->bounds.height);
+    x += menu_w;
+  }
+}
+
+static void menubar_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiMenuBar *bar = (ZuiMenuBar *)widget;
+
+  if (bar->bg_color.a > 0) {
+    zui_renderer_draw_rect(renderer,
+      ZUI_RECT(widget->bounds.x, widget->bounds.y,
+               widget->bounds.width, widget->bounds.height),
+      bar->bg_color);
+  }
+
+  for (size_t i = 0; i < bar->menu_count; i++) {
+    zui_widget_draw((ZuiWidget *)bar->menus[i], renderer);
+  }
+}
+
+static void menubar_draw_overlay(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiMenuBar *bar = (ZuiMenuBar *)widget;
+
+  for (size_t i = 0; i < bar->menu_count; i++) {
+    ZuiMenu *menu = bar->menus[i];
+    if (menu->base.vtable && menu->base.vtable->draw_overlay) {
+      menu->base.vtable->draw_overlay((ZuiWidget *)menu, renderer);
+    }
+  }
+}
+
+static ZuiWidget *menubar_hit_test_children(ZuiWidget *widget, float x, float y)
+{
+  ZuiMenuBar *bar = (ZuiMenuBar *)widget;
+
+  for (size_t i = 0; i < bar->menu_count; i++) {
+    ZuiMenu *menu = bar->menus[i];
+    if (zui_widget_contains_point((ZuiWidget *)menu, x, y)) {
+      return (ZuiWidget *)menu;
+    }
+    if (menu->open && menu->base.vtable->hit_test &&
+        menu->base.vtable->hit_test((ZuiWidget *)menu, x, y)) {
+      return (ZuiWidget *)menu;
+    }
+  }
+  return NULL;
+}
+
+static void menubar_destroy(ZuiWidget *widget)
+{
+  ZuiMenuBar *bar = (ZuiMenuBar *)widget;
+  for (size_t i = 0; i < bar->menu_count; i++) {
+    zui_widget_destroy((ZuiWidget *)bar->menus[i]);
+  }
+}
+
+static const ZuiWidgetVTable menubar_vtable = {
+  .draw = menubar_draw,
+  .draw_overlay = menubar_draw_overlay,
+  .layout = menubar_layout,
+  .hit_test_children = menubar_hit_test_children,
+  .destroy = menubar_destroy,
+};
+
+ZuiMenuBar *zui_menubar_create(void)
+{
+  ZuiMenuBar *bar = (ZuiMenuBar *)zui_widget_create(
+    sizeof(ZuiMenuBar), ZUI_WIDGET_MENUBAR, &menubar_vtable);
+  if (!bar) return NULL;
+
+  bar->menu_count = 0;
+  bar->bg_color = ZUI_COLOR_HEX(0x1a1a1a);
+  bar->text_color = ZUI_COLOR_HEX(0xffffff);
+
+  bar->base.preferred_size.width = 400.0f;
+  bar->base.preferred_size.height = 28.0f;
+
+  return bar;
+}
+
+void zui_menubar_set_size(ZuiMenuBar *bar, float width, float height)
+{
+  if (bar) {
+    bar->base.preferred_size.width = width;
+    bar->base.preferred_size.height = height;
+    bar->base.needs_layout = true;
+  }
+}
+
+void zui_menubar_set_colors(ZuiMenuBar *bar, ZuiColor background, ZuiColor text)
+{
+  if (bar) {
+    bar->bg_color = background;
+    bar->text_color = text;
+  }
+}
+
+void zui_menubar_add_menu(ZuiMenuBar *bar, ZuiMenu *menu)
+{
+  if (!bar || !menu) return;
+  if (bar->menu_count >= ZUI_MENUBAR_MAX_MENUS) return;
+
+  bar->menus[bar->menu_count++] = menu;
+  menu->base.parent = (ZuiWidget *)bar;
+  bar->base.needs_layout = true;
+}
+
+ZuiWidget *zui_menubar_as_widget(ZuiMenuBar *bar)
+{
+  return (ZuiWidget *)bar;
+}
+
+/* ========== PieChart ========== */
+
+#define ZUI_PIECHART_MAX_SLICES 16
+#define ZUI_PI 3.14159265358979323846f
+
+typedef void (*ZuiPieChartCallback)(ZuiPieChart *chart, int slice_index,
+                                     void *user_data);
+
+struct ZuiPieChart {
+  ZuiWidget base;
+  float values[ZUI_PIECHART_MAX_SLICES];
+  ZuiColor colors[ZUI_PIECHART_MAX_SLICES];
+  char *labels[ZUI_PIECHART_MAX_SLICES];
+  size_t slice_count;
+  float hole_radius;
+  bool show_labels;
+  bool show_values;
+  int hovered_slice;
+  ZuiFont *font;
+  ZuiPieChartCallback on_hover_cb;
+  void *hover_user_data;
+  ZuiPieChartCallback on_click_cb;
+  void *click_user_data;
+};
+
+static void piechart_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiPieChart *chart = (ZuiPieChart *)widget;
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x, widget->bounds.y,
+             widget->bounds.width, widget->bounds.height),
+    ZUI_COLOR_HEX(0x222222), 4.0f);
+
+  if (chart->slice_count == 0) return;
+
+  float cx = widget->bounds.x + widget->bounds.width / 2;
+  float cy = widget->bounds.y + widget->bounds.height / 2;
+  float radius = (widget->bounds.width < widget->bounds.height ?
+                  widget->bounds.width : widget->bounds.height) / 2 - 4;
+
+  float total = 0;
+  for (size_t i = 0; i < chart->slice_count; i++) {
+    total += chart->values[i];
+  }
+  if (total <= 0) return;
+
+  float start_angle = -ZUI_PI / 2;
+  for (size_t i = 0; i < chart->slice_count; i++) {
+    float sweep = (chart->values[i] / total) * 2 * ZUI_PI;
+    float end_angle = start_angle + sweep;
+
+    ZuiColor color = chart->colors[i];
+    float draw_radius = radius;
+
+    if ((int)i == chart->hovered_slice) {
+      color = ZUI_COLOR(
+        color.r * 1.2f > 1.0f ? 1.0f : color.r * 1.2f,
+        color.g * 1.2f > 1.0f ? 1.0f : color.g * 1.2f,
+        color.b * 1.2f > 1.0f ? 1.0f : color.b * 1.2f,
+        color.a);
+      draw_radius = radius + 4;
+    }
+
+    if (chart->hole_radius > 0) {
+      zui_renderer_draw_arc_outline(renderer, cx, cy, draw_radius,
+        start_angle, end_angle, draw_radius - chart->hole_radius, color);
+    } else {
+      zui_renderer_draw_arc(renderer, cx, cy, draw_radius,
+        start_angle, end_angle, color);
+    }
+
+    if ((chart->show_labels || chart->show_values) && chart->font) {
+      float mid_angle = start_angle + sweep / 2;
+      float label_radius = (chart->hole_radius > 0)
+        ? (radius + chart->hole_radius) / 2
+        : radius * 0.65f;
+
+      float lx = cx + cosf(mid_angle) * label_radius;
+      float ly = cy + sinf(mid_angle) * label_radius;
+
+      char label_buf[64];
+      if (chart->show_values && chart->labels[i] && chart->show_labels) {
+        snprintf(label_buf, sizeof(label_buf), "%s\n%.0f%%",
+                 chart->labels[i], (chart->values[i] / total) * 100);
+      } else if (chart->show_values) {
+        snprintf(label_buf, sizeof(label_buf), "%.0f%%",
+                 (chart->values[i] / total) * 100);
+      } else if (chart->labels[i]) {
+        snprintf(label_buf, sizeof(label_buf), "%s", chart->labels[i]);
+      } else {
+        label_buf[0] = '\0';
+      }
+
+      if (label_buf[0]) {
+        float tw = zui_font_text_width(chart->font, label_buf);
+        float th = zui_font_text_height(chart->font, label_buf);
+        zui_font_render_text(chart->font, renderer,
+          lx - tw / 2, ly - th / 2, label_buf, ZUI_COLOR_HEX(0xffffff));
+      }
+    }
+
+    start_angle = end_angle;
+  }
+}
+
+static int piechart_slice_at(ZuiPieChart *chart, float x, float y)
+{
+  ZuiWidget *widget = (ZuiWidget *)chart;
+  if (chart->slice_count == 0) return -1;
+
+  float cx = widget->bounds.x + widget->bounds.width / 2;
+  float cy = widget->bounds.y + widget->bounds.height / 2;
+  float radius = (widget->bounds.width < widget->bounds.height ?
+                  widget->bounds.width : widget->bounds.height) / 2 - 4;
+
+  float dx = x - cx;
+  float dy = y - cy;
+  float dist = sqrtf(dx * dx + dy * dy);
+
+  if (dist > radius) return -1;
+  if (chart->hole_radius > 0 && dist < chart->hole_radius) return -1;
+
+  float angle = atan2f(dy, dx);
+  if (angle < 0) angle += 2 * ZUI_PI;
+
+  float total = 0;
+  for (size_t i = 0; i < chart->slice_count; i++) {
+    total += chart->values[i];
+  }
+  if (total <= 0) return -1;
+
+  float start_angle = -ZUI_PI / 2;
+  if (start_angle < 0) start_angle += 2 * ZUI_PI;
+
+  for (size_t i = 0; i < chart->slice_count; i++) {
+    float sweep = (chart->values[i] / total) * 2 * ZUI_PI;
+    float end_angle = start_angle + sweep;
+
+    float s = fmodf(start_angle, 2 * ZUI_PI);
+    float e = fmodf(end_angle, 2 * ZUI_PI);
+    if (s < 0) s += 2 * ZUI_PI;
+    if (e < 0) e += 2 * ZUI_PI;
+
+    bool in_slice;
+    if (s <= e) {
+      in_slice = (angle >= s && angle <= e);
+    } else {
+      in_slice = (angle >= s || angle <= e);
+    }
+
+    if (in_slice) return (int)i;
+    start_angle = end_angle;
+  }
+
+  return -1;
+}
+
+static bool piechart_hit_test(ZuiWidget *widget, float x, float y)
+{
+  (void)widget;
+  (void)x;
+  (void)y;
+  return true;
+}
+
+static void piechart_on_mouse_move(ZuiWidget *widget, float x, float y)
+{
+  ZuiPieChart *chart = (ZuiPieChart *)widget;
+  int old_hover = chart->hovered_slice;
+  chart->hovered_slice = piechart_slice_at(chart, x, y);
+
+  if (chart->hovered_slice != old_hover && chart->on_hover_cb) {
+    chart->on_hover_cb(chart, chart->hovered_slice, chart->hover_user_data);
+  }
+}
+
+static void piechart_on_mouse_leave(ZuiWidget *widget)
+{
+  ZuiPieChart *chart = (ZuiPieChart *)widget;
+  if (chart->hovered_slice >= 0 && chart->on_hover_cb) {
+    chart->on_hover_cb(chart, -1, chart->hover_user_data);
+  }
+  chart->hovered_slice = -1;
+}
+
+static void piechart_on_mouse_up(ZuiWidget *widget, float x, float y, uint32_t button)
+{
+  if (button != BTN_LEFT) return;
+
+  ZuiPieChart *chart = (ZuiPieChart *)widget;
+  int slice = piechart_slice_at(chart, x, y);
+  if (slice >= 0 && chart->on_click_cb) {
+    chart->on_click_cb(chart, slice, chart->click_user_data);
+  }
+}
+
+static void piechart_destroy(ZuiWidget *widget)
+{
+  ZuiPieChart *chart = (ZuiPieChart *)widget;
+  for (size_t i = 0; i < chart->slice_count; i++) {
+    free(chart->labels[i]);
+  }
+}
+
+static const ZuiWidgetVTable piechart_vtable = {
+  .draw = piechart_draw,
+  .hit_test = piechart_hit_test,
+  .on_mouse_move = piechart_on_mouse_move,
+  .on_mouse_leave = piechart_on_mouse_leave,
+  .on_mouse_up = piechart_on_mouse_up,
+  .destroy = piechart_destroy,
+};
+
+ZuiPieChart *zui_piechart_create(void)
+{
+  ZuiPieChart *chart = (ZuiPieChart *)zui_widget_create(
+    sizeof(ZuiPieChart), ZUI_WIDGET_PIE_CHART, &piechart_vtable);
+  if (!chart) return NULL;
+
+  chart->slice_count = 0;
+  chart->hole_radius = 0;
+  chart->show_labels = false;
+  chart->show_values = false;
+  chart->hovered_slice = -1;
+  chart->font = get_default_font();
+  chart->on_hover_cb = NULL;
+  chart->hover_user_data = NULL;
+  chart->on_click_cb = NULL;
+  chart->click_user_data = NULL;
+  chart->base.cursor = ZUI_CURSOR_POINTER;
+  chart->base.preferred_size.width = 100.0f;
+  chart->base.preferred_size.height = 100.0f;
+
+  for (size_t i = 0; i < ZUI_PIECHART_MAX_SLICES; i++) {
+    chart->labels[i] = NULL;
+  }
+
+  return chart;
+}
+
+void zui_piechart_set_size(ZuiPieChart *chart, float size)
+{
+  if (chart) {
+    chart->base.preferred_size.width = size;
+    chart->base.preferred_size.height = size;
+  }
+}
+
+void zui_piechart_add_slice(ZuiPieChart *chart, float value, ZuiColor color)
+{
+  if (!chart || chart->slice_count >= ZUI_PIECHART_MAX_SLICES) return;
+  chart->values[chart->slice_count] = value;
+  chart->colors[chart->slice_count] = color;
+  chart->labels[chart->slice_count] = NULL;
+  chart->slice_count++;
+}
+
+void zui_piechart_add_slice_labeled(ZuiPieChart *chart, float value,
+                                     ZuiColor color, const char *label)
+{
+  if (!chart || chart->slice_count >= ZUI_PIECHART_MAX_SLICES) return;
+  chart->values[chart->slice_count] = value;
+  chart->colors[chart->slice_count] = color;
+  chart->labels[chart->slice_count] = label ? strdup(label) : NULL;
+  chart->slice_count++;
+}
+
+void zui_piechart_clear(ZuiPieChart *chart)
+{
+  if (!chart) return;
+  for (size_t i = 0; i < chart->slice_count; i++) {
+    free(chart->labels[i]);
+    chart->labels[i] = NULL;
+  }
+  chart->slice_count = 0;
+}
+
+void zui_piechart_set_hole_radius(ZuiPieChart *chart, float radius)
+{
+  if (chart) chart->hole_radius = radius;
+}
+
+void zui_piechart_set_show_labels(ZuiPieChart *chart, bool show)
+{
+  if (chart) chart->show_labels = show;
+}
+
+void zui_piechart_set_show_values(ZuiPieChart *chart, bool show)
+{
+  if (chart) chart->show_values = show;
+}
+
+void zui_piechart_on_hover(ZuiPieChart *chart, ZuiPieChartCallback callback,
+                           void *user_data)
+{
+  if (!chart) return;
+  chart->on_hover_cb = callback;
+  chart->hover_user_data = user_data;
+}
+
+void zui_piechart_on_click(ZuiPieChart *chart, ZuiPieChartCallback callback,
+                           void *user_data)
+{
+  if (!chart) return;
+  chart->on_click_cb = callback;
+  chart->click_user_data = user_data;
+}
+
+int zui_piechart_get_hovered_slice(ZuiPieChart *chart)
+{
+  if (!chart) return -1;
+  return chart->hovered_slice;
+}
+
+ZuiWidget *zui_piechart_as_widget(ZuiPieChart *chart)
+{
+  return (ZuiWidget *)chart;
+}
+
+/* ========== BarChart ========== */
+
+#define ZUI_BARCHART_MAX_BARS 32
+
+typedef void (*ZuiBarChartCallback)(ZuiBarChart *chart, int bar_index,
+                                     void *user_data);
+
+struct ZuiBarChart {
+  ZuiWidget base;
+  float values[ZUI_BARCHART_MAX_BARS];
+  ZuiColor colors[ZUI_BARCHART_MAX_BARS];
+  char *labels[ZUI_BARCHART_MAX_BARS];
+  size_t bar_count;
+  float max_value;
+  float bar_spacing;
+  float corner_radius;
+  bool show_labels;
+  bool show_values;
+  int hovered_bar;
+  ZuiFont *font;
+  ZuiBarChartCallback on_hover_cb;
+  void *hover_user_data;
+  ZuiBarChartCallback on_click_cb;
+  void *click_user_data;
+};
+
+static void barchart_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiBarChart *chart = (ZuiBarChart *)widget;
+
+  zui_renderer_draw_rounded_rect(renderer,
+    ZUI_RECT(widget->bounds.x, widget->bounds.y,
+             widget->bounds.width, widget->bounds.height),
+    ZUI_COLOR_HEX(0x222222), 4.0f);
+
+  if (chart->bar_count == 0) return;
+
+  float max_val = chart->max_value;
+  if (max_val <= 0) {
+    for (size_t i = 0; i < chart->bar_count; i++) {
+      if (chart->values[i] > max_val) max_val = chart->values[i];
+    }
+  }
+  if (max_val <= 0) return;
+
+  float total_spacing = chart->bar_spacing * (float)(chart->bar_count - 1);
+  float bar_width = (widget->bounds.width - total_spacing) / (float)chart->bar_count;
+
+  for (size_t i = 0; i < chart->bar_count; i++) {
+    float bar_height = (chart->values[i] / max_val) * widget->bounds.height;
+    float x = widget->bounds.x + (float)i * (bar_width + chart->bar_spacing);
+    float y = widget->bounds.y + widget->bounds.height - bar_height;
+
+    ZuiColor color = chart->colors[i];
+    if ((int)i == chart->hovered_bar) {
+      color = ZUI_COLOR(
+        color.r * 1.2f > 1.0f ? 1.0f : color.r * 1.2f,
+        color.g * 1.2f > 1.0f ? 1.0f : color.g * 1.2f,
+        color.b * 1.2f > 1.0f ? 1.0f : color.b * 1.2f,
+        color.a);
+    }
+
+    if (chart->corner_radius > 0) {
+      zui_renderer_draw_rounded_rect(renderer,
+        ZUI_RECT(x, y, bar_width, bar_height),
+        color, chart->corner_radius);
+    } else {
+      zui_renderer_draw_rect(renderer,
+        ZUI_RECT(x, y, bar_width, bar_height),
+        color);
+    }
+
+    if ((chart->show_labels || chart->show_values) && chart->font) {
+      char label_buf[64];
+      if (chart->show_values && chart->labels[i] && chart->show_labels) {
+        snprintf(label_buf, sizeof(label_buf), "%.0f\n%s",
+                 (double)chart->values[i], chart->labels[i]);
+      } else if (chart->show_values) {
+        snprintf(label_buf, sizeof(label_buf), "%.0f", (double)chart->values[i]);
+      } else if (chart->labels[i]) {
+        snprintf(label_buf, sizeof(label_buf), "%s", chart->labels[i]);
+      } else {
+        label_buf[0] = '\0';
+      }
+
+      if (label_buf[0]) {
+        float tw = zui_font_text_width(chart->font, label_buf);
+        float th = zui_font_text_height(chart->font, label_buf);
+        float lx = x + (bar_width - tw) / 2;
+        float ly = y - th - 2;
+        if (ly < widget->bounds.y) ly = y + 2;
+        zui_font_render_text(chart->font, renderer,
+          lx, ly, label_buf, ZUI_COLOR_HEX(0xffffff));
+      }
+    }
+  }
+}
+
+static int barchart_bar_at(ZuiBarChart *chart, float x, float y)
+{
+  ZuiWidget *widget = (ZuiWidget *)chart;
+  if (chart->bar_count == 0) return -1;
+
+  float max_val = chart->max_value;
+  if (max_val <= 0) {
+    for (size_t i = 0; i < chart->bar_count; i++) {
+      if (chart->values[i] > max_val) max_val = chart->values[i];
+    }
+  }
+  if (max_val <= 0) return -1;
+
+  float total_spacing = chart->bar_spacing * (float)(chart->bar_count - 1);
+  float bar_width = (widget->bounds.width - total_spacing) / (float)chart->bar_count;
+
+  for (size_t i = 0; i < chart->bar_count; i++) {
+    float bar_height = (chart->values[i] / max_val) * widget->bounds.height;
+    float bx = widget->bounds.x + (float)i * (bar_width + chart->bar_spacing);
+    float by = widget->bounds.y + widget->bounds.height - bar_height;
+
+    if (x >= bx && x < bx + bar_width && y >= by && y < by + bar_height) {
+      return (int)i;
+    }
+  }
+
+  return -1;
+}
+
+static bool barchart_hit_test(ZuiWidget *widget, float x, float y)
+{
+  (void)widget;
+  (void)x;
+  (void)y;
+  return true;
+}
+
+static void barchart_on_mouse_move(ZuiWidget *widget, float x, float y)
+{
+  ZuiBarChart *chart = (ZuiBarChart *)widget;
+  int old_hover = chart->hovered_bar;
+  chart->hovered_bar = barchart_bar_at(chart, x, y);
+
+  if (chart->hovered_bar != old_hover && chart->on_hover_cb) {
+    chart->on_hover_cb(chart, chart->hovered_bar, chart->hover_user_data);
+  }
+}
+
+static void barchart_on_mouse_leave(ZuiWidget *widget)
+{
+  ZuiBarChart *chart = (ZuiBarChart *)widget;
+  if (chart->hovered_bar >= 0 && chart->on_hover_cb) {
+    chart->on_hover_cb(chart, -1, chart->hover_user_data);
+  }
+  chart->hovered_bar = -1;
+}
+
+static void barchart_on_mouse_up(ZuiWidget *widget, float x, float y, uint32_t button)
+{
+  if (button != BTN_LEFT) return;
+
+  ZuiBarChart *chart = (ZuiBarChart *)widget;
+  int bar = barchart_bar_at(chart, x, y);
+  if (bar >= 0 && chart->on_click_cb) {
+    chart->on_click_cb(chart, bar, chart->click_user_data);
+  }
+}
+
+static void barchart_destroy(ZuiWidget *widget)
+{
+  ZuiBarChart *chart = (ZuiBarChart *)widget;
+  for (size_t i = 0; i < chart->bar_count; i++) {
+    free(chart->labels[i]);
+  }
+}
+
+static const ZuiWidgetVTable barchart_vtable = {
+  .draw = barchart_draw,
+  .hit_test = barchart_hit_test,
+  .on_mouse_move = barchart_on_mouse_move,
+  .on_mouse_leave = barchart_on_mouse_leave,
+  .on_mouse_up = barchart_on_mouse_up,
+  .destroy = barchart_destroy,
+};
+
+ZuiBarChart *zui_barchart_create(void)
+{
+  ZuiBarChart *chart = (ZuiBarChart *)zui_widget_create(
+    sizeof(ZuiBarChart), ZUI_WIDGET_BAR_CHART, &barchart_vtable);
+  if (!chart) return NULL;
+
+  chart->bar_count = 0;
+  chart->max_value = 0;
+  chart->bar_spacing = 4.0f;
+  chart->corner_radius = 3.0f;
+  chart->show_labels = false;
+  chart->show_values = false;
+  chart->hovered_bar = -1;
+  chart->font = get_default_font();
+  chart->on_hover_cb = NULL;
+  chart->hover_user_data = NULL;
+  chart->on_click_cb = NULL;
+  chart->click_user_data = NULL;
+  chart->base.cursor = ZUI_CURSOR_POINTER;
+  chart->base.preferred_size.width = 200.0f;
+  chart->base.preferred_size.height = 100.0f;
+
+  for (size_t i = 0; i < ZUI_BARCHART_MAX_BARS; i++) {
+    chart->labels[i] = NULL;
+  }
+
+  return chart;
+}
+
+void zui_barchart_set_size(ZuiBarChart *chart, float width, float height)
+{
+  if (chart) {
+    chart->base.preferred_size.width = width;
+    chart->base.preferred_size.height = height;
+  }
+}
+
+void zui_barchart_add_bar(ZuiBarChart *chart, float value, ZuiColor color)
+{
+  if (!chart || chart->bar_count >= ZUI_BARCHART_MAX_BARS) return;
+  chart->values[chart->bar_count] = value;
+  chart->colors[chart->bar_count] = color;
+  chart->labels[chart->bar_count] = NULL;
+  chart->bar_count++;
+}
+
+void zui_barchart_add_bar_labeled(ZuiBarChart *chart, float value,
+                                   ZuiColor color, const char *label)
+{
+  if (!chart || chart->bar_count >= ZUI_BARCHART_MAX_BARS) return;
+  chart->values[chart->bar_count] = value;
+  chart->colors[chart->bar_count] = color;
+  chart->labels[chart->bar_count] = label ? strdup(label) : NULL;
+  chart->bar_count++;
+}
+
+void zui_barchart_clear(ZuiBarChart *chart)
+{
+  if (!chart) return;
+  for (size_t i = 0; i < chart->bar_count; i++) {
+    free(chart->labels[i]);
+    chart->labels[i] = NULL;
+  }
+  chart->bar_count = 0;
+}
+
+void zui_barchart_set_max_value(ZuiBarChart *chart, float max)
+{
+  if (chart) chart->max_value = max;
+}
+
+void zui_barchart_set_bar_spacing(ZuiBarChart *chart, float spacing)
+{
+  if (chart) chart->bar_spacing = spacing;
+}
+
+void zui_barchart_set_corner_radius(ZuiBarChart *chart, float radius)
+{
+  if (chart) chart->corner_radius = radius;
+}
+
+void zui_barchart_set_show_labels(ZuiBarChart *chart, bool show)
+{
+  if (chart) chart->show_labels = show;
+}
+
+void zui_barchart_set_show_values(ZuiBarChart *chart, bool show)
+{
+  if (chart) chart->show_values = show;
+}
+
+void zui_barchart_on_hover(ZuiBarChart *chart, ZuiBarChartCallback callback,
+                           void *user_data)
+{
+  if (!chart) return;
+  chart->on_hover_cb = callback;
+  chart->hover_user_data = user_data;
+}
+
+void zui_barchart_on_click(ZuiBarChart *chart, ZuiBarChartCallback callback,
+                           void *user_data)
+{
+  if (!chart) return;
+  chart->on_click_cb = callback;
+  chart->click_user_data = user_data;
+}
+
+int zui_barchart_get_hovered_bar(ZuiBarChart *chart)
+{
+  if (!chart) return -1;
+  return chart->hovered_bar;
+}
+
+ZuiWidget *zui_barchart_as_widget(ZuiBarChart *chart)
+{
+  return (ZuiWidget *)chart;
+}
+
+/* ========== LineChart ========== */
+
+#define ZUI_LINECHART_MAX_POINTS 128
+
+struct ZuiLineChart {
+  ZuiWidget base;
+  float values[ZUI_LINECHART_MAX_POINTS];
+  size_t point_count;
+  float max_value;
+  ZuiColor line_color;
+  float line_thickness;
+  bool show_points;
+};
+
+static void linechart_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiLineChart *chart = (ZuiLineChart *)widget;
+  if (chart->point_count < 2) return;
+
+  float max_val = chart->max_value;
+  if (max_val <= 0) {
+    for (size_t i = 0; i < chart->point_count; i++) {
+      if (chart->values[i] > max_val) max_val = chart->values[i];
+    }
+  }
+  if (max_val <= 0) return;
+
+  float step_x = widget->bounds.width / (float)(chart->point_count - 1);
+
+  for (size_t i = 0; i < chart->point_count - 1; i++) {
+    float x1 = widget->bounds.x + (float)i * step_x;
+    float y1 = widget->bounds.y + widget->bounds.height -
+               (chart->values[i] / max_val) * widget->bounds.height;
+    float x2 = widget->bounds.x + (float)(i + 1) * step_x;
+    float y2 = widget->bounds.y + widget->bounds.height -
+               (chart->values[i + 1] / max_val) * widget->bounds.height;
+
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.001f) continue;
+
+    float angle = atan2f(dy, dx);
+    float hw = chart->line_thickness / 2;
+
+    float cos_a = cosf(angle);
+    float sin_a = sinf(angle);
+    float px1 = x1 - sin_a * hw;
+    float py1 = y1 + cos_a * hw;
+
+    zui_renderer_draw_rounded_rect(renderer,
+      ZUI_RECT(px1 - hw, py1 - hw, len + chart->line_thickness, chart->line_thickness),
+      chart->line_color, hw);
+  }
+
+  if (chart->show_points) {
+    float point_radius = chart->line_thickness * 1.5f;
+    for (size_t i = 0; i < chart->point_count; i++) {
+      float x = widget->bounds.x + (float)i * step_x;
+      float y = widget->bounds.y + widget->bounds.height -
+                (chart->values[i] / max_val) * widget->bounds.height;
+      zui_renderer_draw_circle(renderer, x, y, point_radius, chart->line_color);
+    }
+  }
+}
+
+static const ZuiWidgetVTable linechart_vtable = {
+  .draw = linechart_draw,
+};
+
+ZuiLineChart *zui_linechart_create(void)
+{
+  ZuiLineChart *chart = (ZuiLineChart *)zui_widget_create(
+    sizeof(ZuiLineChart), ZUI_WIDGET_LINE_CHART, &linechart_vtable);
+  if (!chart) return NULL;
+
+  chart->point_count = 0;
+  chart->max_value = 0;
+  chart->line_color = ZUI_COLOR_HEX(0x4a9eff);
+  chart->line_thickness = 2.0f;
+  chart->show_points = true;
+  chart->base.preferred_size.width = 200.0f;
+  chart->base.preferred_size.height = 100.0f;
+
+  return chart;
+}
+
+void zui_linechart_set_size(ZuiLineChart *chart, float width, float height)
+{
+  if (chart) {
+    chart->base.preferred_size.width = width;
+    chart->base.preferred_size.height = height;
+  }
+}
+
+void zui_linechart_add_point(ZuiLineChart *chart, float value)
+{
+  if (!chart || chart->point_count >= ZUI_LINECHART_MAX_POINTS) return;
+  chart->values[chart->point_count++] = value;
+}
+
+void zui_linechart_clear(ZuiLineChart *chart)
+{
+  if (chart) chart->point_count = 0;
+}
+
+void zui_linechart_set_max_value(ZuiLineChart *chart, float max)
+{
+  if (chart) chart->max_value = max;
+}
+
+void zui_linechart_set_line_color(ZuiLineChart *chart, ZuiColor color)
+{
+  if (chart) chart->line_color = color;
+}
+
+void zui_linechart_set_line_thickness(ZuiLineChart *chart, float thickness)
+{
+  if (chart) chart->line_thickness = thickness;
+}
+
+void zui_linechart_set_show_points(ZuiLineChart *chart, bool show)
+{
+  if (chart) chart->show_points = show;
+}
+
+ZuiWidget *zui_linechart_as_widget(ZuiLineChart *chart)
+{
+  return (ZuiWidget *)chart;
+}
+
+/* ========== CircularProgress ========== */
+
+struct ZuiCircularProgress {
+  ZuiWidget base;
+  float value;
+  float thickness;
+  ZuiColor track_color;
+  ZuiColor fill_color;
+  char *text;
+  bool show_percentage;
+  ZuiColor text_color;
+  ZuiFont *font;
+};
+
+static void circularprogress_draw(ZuiWidget *widget, ZuiRenderer *renderer)
+{
+  ZuiCircularProgress *cp = (ZuiCircularProgress *)widget;
+
+  float cx = widget->bounds.x + widget->bounds.width / 2;
+  float cy = widget->bounds.y + widget->bounds.height / 2;
+  float radius = (widget->bounds.width < widget->bounds.height ?
+                  widget->bounds.width : widget->bounds.height) / 2 - 4;
+
+  zui_renderer_draw_circle_outline(renderer, cx, cy, radius,
+    cp->thickness, cp->track_color);
+
+  if (cp->value > 0) {
+    float start_angle = -ZUI_PI / 2;
+    float end_angle = start_angle + cp->value * 2 * ZUI_PI;
+    zui_renderer_draw_arc_outline(renderer, cx, cy, radius,
+      start_angle, end_angle, cp->thickness, cp->fill_color);
+  }
+
+  if (cp->font && (cp->text || cp->show_percentage)) {
+    char display_text[64];
+    if (cp->text) {
+      snprintf(display_text, sizeof(display_text), "%s", cp->text);
+    } else {
+      snprintf(display_text, sizeof(display_text), "%.0f%%",
+               (double)(cp->value * 100));
+    }
+
+    float tw = zui_font_text_width(cp->font, display_text);
+    float th = zui_font_text_height(cp->font, display_text);
+    zui_font_render_text(cp->font, renderer,
+      cx - tw / 2, cy - th / 2, display_text, cp->text_color);
+  }
+}
+
+static void circularprogress_destroy(ZuiWidget *widget)
+{
+  ZuiCircularProgress *cp = (ZuiCircularProgress *)widget;
+  free(cp->text);
+}
+
+static const ZuiWidgetVTable circularprogress_vtable = {
+  .draw = circularprogress_draw,
+  .destroy = circularprogress_destroy,
+};
+
+ZuiCircularProgress *zui_circularprogress_create(void)
+{
+  ZuiCircularProgress *cp = (ZuiCircularProgress *)zui_widget_create(
+    sizeof(ZuiCircularProgress), ZUI_WIDGET_CIRCULAR_PROGRESS,
+    &circularprogress_vtable);
+  if (!cp) return NULL;
+
+  cp->value = 0;
+  cp->thickness = 8.0f;
+  cp->track_color = ZUI_COLOR_HEX(0x333333);
+  cp->fill_color = ZUI_COLOR_HEX(0x4a9eff);
+  cp->text = NULL;
+  cp->show_percentage = false;
+  cp->text_color = ZUI_COLOR_HEX(0xffffff);
+  cp->font = get_default_font();
+  cp->base.preferred_size.width = 60.0f;
+  cp->base.preferred_size.height = 60.0f;
+
+  return cp;
+}
+
+void zui_circularprogress_set_size(ZuiCircularProgress *cp, float size)
+{
+  if (cp) {
+    cp->base.preferred_size.width = size;
+    cp->base.preferred_size.height = size;
+  }
+}
+
+void zui_circularprogress_set_value(ZuiCircularProgress *cp, float value)
+{
+  if (cp) {
+    cp->value = value < 0 ? 0 : (value > 1 ? 1 : value);
+  }
+}
+
+float zui_circularprogress_get_value(ZuiCircularProgress *cp)
+{
+  return cp ? cp->value : 0;
+}
+
+void zui_circularprogress_set_thickness(ZuiCircularProgress *cp, float thickness)
+{
+  if (cp) cp->thickness = thickness;
+}
+
+void zui_circularprogress_set_colors(ZuiCircularProgress *cp, ZuiColor track,
+                                      ZuiColor fill)
+{
+  if (cp) {
+    cp->track_color = track;
+    cp->fill_color = fill;
+  }
+}
+
+void zui_circularprogress_set_text(ZuiCircularProgress *cp, const char *text)
+{
+  if (!cp) return;
+  free(cp->text);
+  cp->text = text ? strdup(text) : NULL;
+}
+
+void zui_circularprogress_set_show_percentage(ZuiCircularProgress *cp, bool show)
+{
+  if (cp) cp->show_percentage = show;
+}
+
+void zui_circularprogress_set_text_color(ZuiCircularProgress *cp, ZuiColor color)
+{
+  if (cp) cp->text_color = color;
+}
+
+ZuiWidget *zui_circularprogress_as_widget(ZuiCircularProgress *cp)
+{
+  return (ZuiWidget *)cp;
 }

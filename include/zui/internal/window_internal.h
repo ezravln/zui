@@ -24,6 +24,7 @@ struct ZuiWindow {
   ZuiTitlebar *titlebar;
   ZuiWidget *content;
   ZuiWidget *focused;
+  ZuiWidget *overlay;
 
   char *title;
   int width;

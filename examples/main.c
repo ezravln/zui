@@ -29,6 +29,71 @@ static void on_text_change(ZuiTextInput *input, const char *text, void *user_dat
   printf("Text: %s\n", text);
 }
 
+static ZuiCircularProgress *g_cprogress = NULL;
+
+static void on_slider_change(ZuiSlider *slider, float value, void *user_data)
+{
+  (void)slider;
+  ZuiProgressBar *progress = user_data;
+  if (progress) {
+    zui_progressbar_set_value(progress, value / 100.0f);
+  }
+  if (g_cprogress) {
+    zui_circularprogress_set_value(g_cprogress, value / 100.0f);
+  }
+  printf("Slider: %.1f\n", value);
+}
+
+static void on_piechart_hover(ZuiPieChart *chart, int slice_index, void *user_data)
+{
+  (void)chart;
+  (void)user_data;
+  if (slice_index >= 0) {
+    printf("PieChart: hovering slice %d\n", slice_index);
+  }
+}
+
+static void on_barchart_hover(ZuiBarChart *chart, int bar_index, void *user_data)
+{
+  (void)chart;
+  (void)user_data;
+  if (bar_index >= 0) {
+    printf("BarChart: hovering bar %d\n", bar_index);
+  }
+}
+
+static void on_dropdown_change(ZuiDropdown *dropdown, int index, const char *item, void *user_data)
+{
+  (void)dropdown;
+  (void)user_data;
+  printf("Dropdown selected [%d]: %s\n", index, item);
+}
+
+static void on_menu_item_click(ZuiMenuItem *item, void *user_data)
+{
+  (void)item;
+  const char *action = (const char *)user_data;
+  printf("Menu clicked: %s\n", action ? action : "unknown");
+}
+
+static void on_video_end(ZuiVideo *video, void *user_data)
+{
+  (void)video;
+  (void)user_data;
+  printf("Video ended!\n");
+}
+
+static ZuiVideo *g_video = NULL;
+
+static void on_video_toggle(ZuiWidget *widget, void *user_data)
+{
+  (void)widget;
+  (void)user_data;
+  if (g_video) {
+    zui_video_toggle_playback(g_video);
+  }
+}
+
 static ZuiScrollView *g_scrollview = NULL;
 static ZuiScroller *g_scroller = NULL;
 
@@ -113,15 +178,88 @@ int main(void)
     zui_panel_add_child(sidebar, (ZuiWidget *)btn);
   }
 
+  ZuiPanel *content_outer = zui_panel_create();
+  zui_panel_set_layout(content_outer, ZUI_LAYOUT_VERTICAL);
+  zui_set_fill(zui_panel_as_widget(content_outer), true, true);
+  zui_set_background(zui_panel_as_widget(content_outer), ZUI_COLOR_HEX(0x2d2d2d));
+  zui_set_corner_radius(zui_panel_as_widget(content_outer), 8.0f);
+  zui_splitview_add_child(splitview, zui_panel_as_widget(content_outer));
+  zui_splitview_set_handle_position(splitview, 0, 200.0f);
+
+  ZuiMenuBar *menubar = zui_menubar_create();
+  zui_menubar_set_size(menubar, 0, 28.0f);
+  zui_set_fill(zui_menubar_as_widget(menubar), true, false);
+
+  ZuiMenu *file_menu = zui_menu_create("File");
+  ZuiMenuItem *new_item = zui_menuitem_create("New");
+  zui_menuitem_set_icon(new_item, "assets/icons/x-file-icon.svg", 14.0f);
+  zui_menuitem_set_shortcut(new_item, "Ctrl+N");
+  zui_menuitem_on_click(new_item, on_menu_item_click, "New");
+  zui_menu_add_item(file_menu, new_item);
+
+  ZuiMenuItem *open_item = zui_menuitem_create("Open");
+  zui_menuitem_set_icon(open_item, "assets/icons/x-file-icon.svg", 14.0f);
+  zui_menuitem_set_shortcut(open_item, "Ctrl+O");
+  zui_menuitem_on_click(open_item, on_menu_item_click, "Open");
+  zui_menu_add_item(file_menu, open_item);
+
+  ZuiMenuItem *save_item = zui_menuitem_create("Save");
+  zui_menuitem_set_shortcut(save_item, "Ctrl+S");
+  zui_menuitem_on_click(save_item, on_menu_item_click, "Save");
+  zui_menu_add_item(file_menu, save_item);
+
+  zui_menu_add_separator(file_menu);
+
+  ZuiMenuItem *exit_item = zui_menuitem_create("Exit");
+  zui_menuitem_set_shortcut(exit_item, "Alt+F4");
+  zui_menuitem_on_click(exit_item, on_menu_item_click, "Exit");
+  zui_menu_add_item(file_menu, exit_item);
+  zui_menubar_add_menu(menubar, file_menu);
+
+  ZuiMenu *edit_menu = zui_menu_create("Edit");
+  ZuiMenuItem *undo_item = zui_menuitem_create("Undo");
+  zui_menuitem_set_shortcut(undo_item, "Ctrl+Z");
+  zui_menuitem_on_click(undo_item, on_menu_item_click, "Undo");
+  zui_menu_add_item(edit_menu, undo_item);
+
+  ZuiMenuItem *redo_item = zui_menuitem_create("Redo");
+  zui_menuitem_set_shortcut(redo_item, "Ctrl+Y");
+  zui_menuitem_on_click(redo_item, on_menu_item_click, "Redo");
+  zui_menu_add_item(edit_menu, redo_item);
+
+  zui_menu_add_separator(edit_menu);
+
+  ZuiMenuItem *cut_item = zui_menuitem_create("Cut");
+  zui_menuitem_set_shortcut(cut_item, "Ctrl+X");
+  zui_menu_add_item(edit_menu, cut_item);
+
+  ZuiMenuItem *copy_item = zui_menuitem_create("Copy");
+  zui_menuitem_set_shortcut(copy_item, "Ctrl+C");
+  zui_menu_add_item(edit_menu, copy_item);
+
+  ZuiMenuItem *paste_item = zui_menuitem_create("Paste");
+  zui_menuitem_set_shortcut(paste_item, "Ctrl+V");
+  zui_menu_add_item(edit_menu, paste_item);
+  zui_menubar_add_menu(menubar, edit_menu);
+
+  ZuiMenu *help_menu = zui_menu_create("Help");
+  ZuiMenuItem *about_item = zui_menuitem_create("About");
+  zui_menuitem_on_click(about_item, on_menu_item_click, "About");
+  zui_menu_add_item(help_menu, about_item);
+  zui_menubar_add_menu(menubar, help_menu);
+
+  zui_panel_add_child(content_outer, zui_menubar_as_widget(menubar));
+
+  ZuiScrollView *content_scroll = zui_scrollview_create();
+  zui_set_fill(zui_scrollview_as_widget(content_scroll), true, true);
+  zui_panel_add_child(content_outer, zui_scrollview_as_widget(content_scroll));
+
   ZuiPanel *content_panel = zui_panel_create();
   zui_panel_set_layout(content_panel, ZUI_LAYOUT_VERTICAL);
-  zui_set_fill(zui_panel_as_widget(content_panel), true, true);
-  zui_set_background(zui_panel_as_widget(content_panel), ZUI_COLOR_HEX(0x2d2d2d));
-  zui_set_corner_radius(zui_panel_as_widget(content_panel), 8.0f);
   zui_panel_set_padding(content_panel, 20.0f, 20.0f, 20.0f, 20.0f);
   zui_set_spacing(zui_panel_as_widget(content_panel), 15.0f);
-  zui_splitview_add_child(splitview, zui_panel_as_widget(content_panel));
-  zui_splitview_set_handle_position(splitview, 0, 200.0f);
+  zui_set_size(zui_panel_as_widget(content_panel), 400.0f, 950.0f);
+  zui_scrollview_set_content(content_scroll, zui_panel_as_widget(content_panel));
 
   ZuiLabel *content_title = zui_label_create("Welcome to ZUI");
   zui_label_set_size(content_title, 28.0f);
@@ -158,6 +296,100 @@ int main(void)
   ZuiTextInput *text_input3 = zui_textinput_create("Enter message...");
   zui_textinput_set_size(text_input3, 280.0f, 36.0f);
   zui_panel_add_child(content_panel, zui_textinput_as_widget(text_input3));
+
+  ZuiProgressBar *progress = zui_progressbar_create();
+  zui_progressbar_set_size(progress, 280.0f, 10.0f);
+  zui_progressbar_set_value(progress, 0.5f);
+  zui_panel_add_child(content_panel, zui_progressbar_as_widget(progress));
+
+  ZuiSlider *slider = zui_slider_create(0.0f, 100.0f, 50.0f);
+  zui_slider_set_size(slider, 280.0f, 24.0f);
+  zui_slider_on_change(slider, on_slider_change, progress);
+  zui_panel_add_child(content_panel, zui_slider_as_widget(slider));
+
+  ZuiDropdown *dropdown = zui_dropdown_create("Select an option...");
+  zui_dropdown_set_size(dropdown, 200.0f, 36.0f);
+  zui_dropdown_add_item(dropdown, "Option 1");
+  zui_dropdown_add_item(dropdown, "Option 2");
+  zui_dropdown_add_item(dropdown, "Option 3");
+  zui_dropdown_add_item(dropdown, "Custom Option");
+  zui_dropdown_on_change(dropdown, on_dropdown_change, NULL);
+  zui_panel_add_child(content_panel, zui_dropdown_as_widget(dropdown));
+
+  ZuiGridView *gridview = zui_gridview_create(4);
+  zui_gridview_set_size(gridview, 300.0f, 150.0f);
+  zui_gridview_set_gap(gridview, 6.0f, 6.0f);
+  zui_gridview_set_padding(gridview, 6.0f);
+  zui_gridview_set_background(gridview, ZUI_COLOR_HEX(0x2a2a2a));
+  for (int i = 0; i < 20; i++) {
+    ZuiButton *grid_btn = zui_button_create("");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", i + 1);
+    zui_button_set_text(grid_btn, buf);
+    zui_button_set_size(grid_btn, 60.0f, 60.0f);
+    zui_gridview_add_child(gridview, (ZuiWidget *)grid_btn);
+  }
+  zui_panel_add_child(content_panel, zui_gridview_as_widget(gridview));
+
+  ZuiPanel *charts_panel = zui_panel_create();
+  zui_panel_set_layout(charts_panel, ZUI_LAYOUT_HORIZONTAL);
+  zui_set_spacing(zui_panel_as_widget(charts_panel), 15.0f);
+  zui_set_size(zui_panel_as_widget(charts_panel), 300.0f, 100.0f);
+  zui_panel_add_child(content_panel, zui_panel_as_widget(charts_panel));
+
+  ZuiPieChart *piechart = zui_piechart_create();
+  zui_piechart_set_size(piechart, 80.0f);
+  zui_piechart_add_slice_labeled(piechart, 30, ZUI_COLOR_HEX(0x4a9eff), "A");
+  zui_piechart_add_slice_labeled(piechart, 25, ZUI_COLOR_HEX(0x22c55e), "B");
+  zui_piechart_add_slice_labeled(piechart, 20, ZUI_COLOR_HEX(0xf59e0b), "C");
+  zui_piechart_add_slice_labeled(piechart, 25, ZUI_COLOR_HEX(0xef4444), "D");
+  zui_piechart_set_show_values(piechart, true);
+  zui_piechart_on_hover(piechart, on_piechart_hover, NULL);
+  zui_panel_add_child(charts_panel, zui_piechart_as_widget(piechart));
+
+  ZuiBarChart *barchart = zui_barchart_create();
+  zui_barchart_set_size(barchart, 120.0f, 80.0f);
+  zui_barchart_add_bar_labeled(barchart, 70, ZUI_COLOR_HEX(0x4a9eff), "Mon");
+  zui_barchart_add_bar_labeled(barchart, 50, ZUI_COLOR_HEX(0x22c55e), "Tue");
+  zui_barchart_add_bar_labeled(barchart, 90, ZUI_COLOR_HEX(0xf59e0b), "Wed");
+  zui_barchart_add_bar_labeled(barchart, 40, ZUI_COLOR_HEX(0xef4444), "Thu");
+  zui_barchart_add_bar_labeled(barchart, 60, ZUI_COLOR_HEX(0xa855f7), "Fri");
+  zui_barchart_set_show_values(barchart, true);
+  zui_barchart_on_hover(barchart, on_barchart_hover, NULL);
+  zui_panel_add_child(charts_panel, zui_barchart_as_widget(barchart));
+
+  ZuiCircularProgress *cprogress = zui_circularprogress_create();
+  zui_circularprogress_set_size(cprogress, 80.0f);
+  zui_circularprogress_set_value(cprogress, 0.65f);
+  zui_circularprogress_set_thickness(cprogress, 8.0f);
+  zui_circularprogress_set_colors(cprogress, ZUI_COLOR_HEX(0x333333),
+                                   ZUI_COLOR_HEX(0x22c55e));
+  zui_circularprogress_set_show_percentage(cprogress, true);
+  g_cprogress = cprogress;
+  zui_panel_add_child(charts_panel, zui_circularprogress_as_widget(cprogress));
+
+  ZuiLabel *video_label = zui_label_create("Video Player");
+  zui_label_set_size(video_label, 14.0f);
+  zui_label_set_color(video_label, ZUI_COLOR_HEX(0x888888));
+  zui_panel_add_child(content_panel, (ZuiWidget *)video_label);
+
+  ZuiVideo *video = zui_video_create(NULL);
+  if (video) {
+    g_video = video;
+    zui_video_set_size(video, 320.0f, 180.0f);
+    zui_video_set_loop(video, false);
+    zui_video_on_end(video, on_video_end, NULL);
+    zui_video_open(video, "assets/video/video.mp4");
+    zui_video_play(video);
+    ZuiWidget *video_widget = zui_video_as_widget(video);
+    zui_set_corner_radius(video_widget, 8.0f);
+    zui_panel_add_child(content_panel, video_widget);
+
+    ZuiButton *video_toggle = zui_button_create("Play/Pause");
+    zui_button_set_size(video_toggle, 100.0f, 30.0f);
+    zui_button_on_click(video_toggle, on_video_toggle, NULL);
+    zui_panel_add_child(content_panel, (ZuiWidget *)video_toggle);
+  }
 
   ZuiRadioGroup *radio_group = zui_radiogroup_create();
   zui_radiogroup_on_change(radio_group, on_radio_change, NULL);

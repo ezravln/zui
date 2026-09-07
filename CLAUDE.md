@@ -69,36 +69,6 @@ Do not implement these backends prematurely.
 
 ## Architecture
 
-Prefer a modular architecture similar to:
-
-```text
-zui/
-├── include/
-│   └── zui/
-│       ├── zui.h
-│       ├── window.h
-│       ├── widget.h
-│       ├── input.h
-│       └── ...
-│
-├── src/
-│   ├── core/
-│   ├── platform/
-│   │   └── wayland/
-│   ├── renderer/
-│   │   └── opengl/
-│   ├── widgets/
-│   └── input/
-│
-├── examples/
-├── tests/
-├── docs/
-├── CMakeLists.txt
-└── README.md
-```
-
-The exact structure may evolve as the project grows.
-
 ### Separation of Concerns
 
 Keep these systems separate:

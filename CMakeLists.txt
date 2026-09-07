@@ -40,6 +40,10 @@ pkg_check_modules(EGL REQUIRED egl)
 pkg_check_modules(XKB REQUIRED xkbcommon)
 find_package(OpenGL REQUIRED COMPONENTS OpenGL)
 
+# Optional: libmpv for video playback
+pkg_check_modules(MPV QUIET mpv)
+option(ZUI_VIDEO_MPV "Build libmpv video backend" ${MPV_FOUND})
+
 # GLAD (vendored OpenGL/EGL loader)
 add_library(glad STATIC
   external/glad/src/glad.c
@@ -76,7 +80,19 @@ add_library(zui STATIC
   # Renderer - OpenGL
   src/renderer/opengl/egl_context.c
   src/renderer/opengl/renderer.c
+
+  # Video
+  src/core/video.c
+  src/video/video_backend.c
 )
+
+# Video backends
+if(ZUI_VIDEO_MPV)
+  target_sources(zui PRIVATE src/video/backends/mpv_backend.c)
+  target_compile_definitions(zui PRIVATE ZUI_HAS_MPV)
+  target_link_libraries(zui PRIVATE ${MPV_LIBRARIES})
+  target_include_directories(zui PRIVATE ${MPV_INCLUDE_DIRS})
+endif()
 
 target_include_directories(zui
   PUBLIC
@@ -125,6 +141,7 @@ add_custom_target(copy_assets ALL
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/assets/shaders"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/assets/icons"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/assets/logo"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/assets/video"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders"
     "${CMAKE_CURRENT_BINARY_DIR}/assets/shaders"
@@ -134,6 +151,9 @@ add_custom_target(copy_assets ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/logo"
     "${CMAKE_CURRENT_BINARY_DIR}/assets/logo"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/video"
+    "${CMAKE_CURRENT_BINARY_DIR}/assets/video"
   COMMENT "Copying asset files"
 )
 
@@ -154,4 +174,5 @@ message(STATUS "  C compiler: ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}
 message(STATUS "  Wayland:    ${WAYLAND_VERSION}")
 message(STATUS "  EGL:        ${EGL_VERSION}")
 message(STATUS "  Examples:   ${ZUI_BUILD_EXAMPLES}")
+message(STATUS "  Video MPV:  ${ZUI_VIDEO_MPV}")
 message(STATUS "")

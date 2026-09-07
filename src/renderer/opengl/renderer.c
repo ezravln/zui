@@ -138,6 +138,25 @@ bool zui_renderer_init(ZuiRenderer *renderer, const char *shader_path)
     return false;
   }
 
+  renderer->circle_shader = load_shader_program(shader_path,
+                                                 "circle.vert", "circle.frag");
+  if (!renderer->circle_shader) {
+    glDeleteProgram(renderer->glyph_shader);
+    glDeleteProgram(renderer->tex_shader);
+    glDeleteProgram(renderer->rect_shader);
+    return false;
+  }
+
+  renderer->arc_shader = load_shader_program(shader_path,
+                                              "arc.vert", "arc.frag");
+  if (!renderer->arc_shader) {
+    glDeleteProgram(renderer->circle_shader);
+    glDeleteProgram(renderer->glyph_shader);
+    glDeleteProgram(renderer->tex_shader);
+    glDeleteProgram(renderer->rect_shader);
+    return false;
+  }
+
   static const float quad_verts[] = {
     0.0f, 0.0f,
     1.0f, 0.0f,
@@ -182,11 +201,42 @@ bool zui_renderer_init(ZuiRenderer *renderer, const char *shader_path)
                         (void*)(2 * sizeof(float)));
 
   glBindVertexArray(0);
+
+  glGenVertexArrays(1, &renderer->circle_vao);
+  glGenBuffers(1, &renderer->circle_vbo);
+
+  glBindVertexArray(renderer->circle_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, renderer->circle_vbo);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(quad_verts), quad_verts, GL_STATIC_DRAW);
+
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+
+  glBindVertexArray(0);
+
+  glGenVertexArrays(1, &renderer->arc_vao);
+  glGenBuffers(1, &renderer->arc_vbo);
+
+  glBindVertexArray(renderer->arc_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, renderer->arc_vbo);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(quad_verts), quad_verts, GL_STATIC_DRAW);
+
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+
+  glBindVertexArray(0);
+
   return true;
 }
 
 void zui_renderer_shutdown(ZuiRenderer *renderer)
 {
+  if (renderer->arc_vbo) glDeleteBuffers(1, &renderer->arc_vbo);
+  if (renderer->arc_vao) glDeleteVertexArrays(1, &renderer->arc_vao);
+  if (renderer->arc_shader) glDeleteProgram(renderer->arc_shader);
+  if (renderer->circle_vbo) glDeleteBuffers(1, &renderer->circle_vbo);
+  if (renderer->circle_vao) glDeleteVertexArrays(1, &renderer->circle_vao);
+  if (renderer->circle_shader) glDeleteProgram(renderer->circle_shader);
   if (renderer->glyph_shader) glDeleteProgram(renderer->glyph_shader);
   if (renderer->tex_vbo) glDeleteBuffers(1, &renderer->tex_vbo);
   if (renderer->tex_vao) glDeleteVertexArrays(1, &renderer->tex_vao);
@@ -295,6 +345,81 @@ void zui_renderer_draw_rounded_rect_outline(ZuiRenderer *renderer, ZuiRect rect,
   draw_rect_internal(renderer, rect, color, radius, radius, radius, radius, thickness);
 }
 
+static void draw_circle_internal(ZuiRenderer *renderer, float cx, float cy,
+                                  float radius, ZuiColor color, float thickness)
+{
+  glUseProgram(renderer->circle_shader);
+  glBindVertexArray(renderer->circle_vao);
+
+  GLint res_loc = glGetUniformLocation(renderer->circle_shader, "u_resolution");
+  glUniform2f(res_loc, (float)renderer->viewport_width,
+              (float)renderer->viewport_height);
+
+  apply_clip_uniforms(renderer, renderer->circle_shader);
+
+  glVertexAttrib2f(1, cx, cy);
+  glVertexAttrib1f(2, radius);
+  glVertexAttrib4f(3, color.r, color.g, color.b, color.a);
+  glVertexAttrib1f(4, thickness);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  glBindVertexArray(0);
+  glUseProgram(0);
+}
+
+void zui_renderer_draw_circle(ZuiRenderer *renderer, float cx, float cy,
+                               float radius, ZuiColor color)
+{
+  draw_circle_internal(renderer, cx, cy, radius, color, 0);
+}
+
+void zui_renderer_draw_circle_outline(ZuiRenderer *renderer, float cx, float cy,
+                                       float radius, float thickness, ZuiColor color)
+{
+  draw_circle_internal(renderer, cx, cy, radius, color, thickness);
+}
+
+static void draw_arc_internal(ZuiRenderer *renderer, float cx, float cy,
+                               float radius, float start_angle, float end_angle,
+                               ZuiColor color, float thickness)
+{
+  glUseProgram(renderer->arc_shader);
+  glBindVertexArray(renderer->arc_vao);
+
+  GLint res_loc = glGetUniformLocation(renderer->arc_shader, "u_resolution");
+  glUniform2f(res_loc, (float)renderer->viewport_width,
+              (float)renderer->viewport_height);
+
+  apply_clip_uniforms(renderer, renderer->arc_shader);
+
+  glVertexAttrib2f(1, cx, cy);
+  glVertexAttrib1f(2, radius);
+  glVertexAttrib4f(3, color.r, color.g, color.b, color.a);
+  glVertexAttrib1f(4, start_angle);
+  glVertexAttrib1f(5, end_angle);
+  glVertexAttrib1f(6, thickness);
+
+  glDrawArrays(GL_TRIANGLES, 0, 6);
+
+  glBindVertexArray(0);
+  glUseProgram(0);
+}
+
+void zui_renderer_draw_arc(ZuiRenderer *renderer, float cx, float cy,
+                            float radius, float start_angle, float end_angle,
+                            ZuiColor color)
+{
+  draw_arc_internal(renderer, cx, cy, radius, start_angle, end_angle, color, 0);
+}
+
+void zui_renderer_draw_arc_outline(ZuiRenderer *renderer, float cx, float cy,
+                                    float radius, float start_angle, float end_angle,
+                                    float thickness, ZuiColor color)
+{
+  draw_arc_internal(renderer, cx, cy, radius, start_angle, end_angle, color, thickness);
+}
+
 ZuiTexture zui_texture_create(const uint8_t *data, int width, int height)
 {
   ZuiTexture texture = {0, width, height};
@@ -339,6 +464,36 @@ void zui_texture_destroy(ZuiTexture *texture)
     glDeleteTextures(1, &texture->id);
     texture->id = 0;
   }
+}
+
+ZuiTexture zui_texture_create_empty(int width, int height)
+{
+  ZuiTexture texture = {0, width, height};
+
+  glGenTextures(1, &texture.id);
+  glBindTexture(GL_TEXTURE_2D, texture.id);
+
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+               GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+  glBindTexture(GL_TEXTURE_2D, 0);
+  return texture;
+}
+
+void zui_texture_update(ZuiTexture *texture, const uint8_t *data,
+                        int x, int y, int width, int height)
+{
+  if (!texture || !texture->id || !data) return;
+
+  glBindTexture(GL_TEXTURE_2D, texture->id);
+  glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, width, height,
+                  GL_RGBA, GL_UNSIGNED_BYTE, data);
+  glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void zui_renderer_draw_texture(ZuiRenderer *renderer, ZuiTexture *texture,

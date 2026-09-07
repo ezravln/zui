@@ -21,6 +21,8 @@ static ZuiWidget *g_hovered_widget = NULL;
 static ZuiWidget *g_pressed_widget = NULL;
 static uint32_t g_resize_edge = 0;
 
+static bool overlay_hit_test(ZuiWidget *overlay, float x, float y);
+
 static uint32_t detect_resize_edge(ZuiWindow *window, float x, float y)
 {
   if (window->maximized) return 0;
@@ -354,6 +356,8 @@ ZuiWindow *zui_window_create(int width, int height, const char *title)
     zui_widget_add_child((ZuiWidget *)window, window->content);
   }
 
+  window->overlay = NULL;
+
   return window;
 }
 
@@ -423,6 +427,11 @@ void zui_window_render(ZuiWindow *window)
     window->background_color, inner_radius);
 
   zui_widget_draw((ZuiWidget *)window, renderer);
+
+  if (window->overlay && window->overlay->vtable &&
+      window->overlay->vtable->draw_overlay) {
+    window->overlay->vtable->draw_overlay(window->overlay, renderer);
+  }
 
   zui_renderer_pop_clip(renderer);
 
@@ -529,6 +538,11 @@ void zui_window_handle_motion(ZuiWindow *window, double x, double y)
     window->needs_redraw = true;
   }
 
+  if (window->overlay && window->overlay->vtable &&
+      window->overlay->vtable->on_mouse_move) {
+    window->overlay->vtable->on_mouse_move(window->overlay, (float)x, (float)y);
+  }
+
   g_resize_edge = detect_resize_edge(window, (float)x, (float)y);
 
   if (g_resize_edge) {
@@ -536,9 +550,22 @@ void zui_window_handle_motion(ZuiWindow *window, double x, double y)
     ZuiPlatform *platform = zui_get_platform();
     zui_platform_set_cursor(platform, resize_edge_to_cursor(g_resize_edge));
   } else {
-    ZuiWidget *hit = zui_widget_hit_test((ZuiWidget *)window, (float)x, (float)y);
+    ZuiWidget *hit = NULL;
+    if (window->overlay && overlay_hit_test(window->overlay, (float)x, (float)y)) {
+      hit = window->overlay;
+    } else {
+      hit = zui_widget_hit_test((ZuiWidget *)window, (float)x, (float)y);
+    }
     update_hover(window, hit);
   }
+}
+
+static bool overlay_hit_test(ZuiWidget *overlay, float x, float y)
+{
+  if (!overlay || !overlay->vtable || !overlay->vtable->hit_test) {
+    return false;
+  }
+  return overlay->vtable->hit_test(overlay, x, y);
 }
 
 void zui_window_handle_button(ZuiWindow *window, double x, double y,
@@ -552,7 +579,13 @@ void zui_window_handle_button(ZuiWindow *window, double x, double y,
     return;
   }
 
-  ZuiWidget *hit = zui_widget_hit_test((ZuiWidget *)window, (float)x, (float)y);
+  ZuiWidget *hit = NULL;
+
+  if (window->overlay && overlay_hit_test(window->overlay, (float)x, (float)y)) {
+    hit = window->overlay;
+  } else {
+    hit = zui_widget_hit_test((ZuiWidget *)window, (float)x, (float)y);
+  }
 
   if (pressed && button == BTN_LEFT) {
     g_pressed_widget = hit;
@@ -661,6 +694,16 @@ void zui_window_set_active_state(ZuiWindow *window, bool active)
 void zui_window_mark_needs_redraw(ZuiWindow *window)
 {
   if (window) window->needs_redraw = true;
+}
+
+void zui_window_set_overlay(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (window) window->overlay = widget;
+}
+
+void zui_window_clear_overlay(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (window && window->overlay == widget) window->overlay = NULL;
 }
 
 void zui_window_minimize(ZuiWindow *window)

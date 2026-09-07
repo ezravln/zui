@@ -34,6 +34,14 @@ typedef struct ZuiRenderer {
 
   GLuint glyph_shader;
 
+  GLuint circle_shader;
+  GLuint circle_vao;
+  GLuint circle_vbo;
+
+  GLuint arc_shader;
+  GLuint arc_vao;
+  GLuint arc_vbo;
+
   int viewport_width;
   int viewport_height;
 
@@ -59,9 +67,23 @@ void zui_renderer_draw_rounded_rect_outline(ZuiRenderer *renderer, ZuiRect rect,
                                              ZuiColor color, float radius,
                                              float thickness);
 
+void zui_renderer_draw_circle(ZuiRenderer *renderer, float cx, float cy,
+                               float radius, ZuiColor color);
+void zui_renderer_draw_circle_outline(ZuiRenderer *renderer, float cx, float cy,
+                                       float radius, float thickness, ZuiColor color);
+void zui_renderer_draw_arc(ZuiRenderer *renderer, float cx, float cy,
+                            float radius, float start_angle, float end_angle,
+                            ZuiColor color);
+void zui_renderer_draw_arc_outline(ZuiRenderer *renderer, float cx, float cy,
+                                    float radius, float start_angle, float end_angle,
+                                    float thickness, ZuiColor color);
+
 ZuiTexture zui_texture_create(const uint8_t *data, int width, int height);
+ZuiTexture zui_texture_create_empty(int width, int height);
 ZuiTexture zui_texture_load(const char *path);
 void zui_texture_destroy(ZuiTexture *texture);
+void zui_texture_update(ZuiTexture *texture, const uint8_t *data,
+                        int x, int y, int width, int height);
 void zui_renderer_draw_texture(ZuiRenderer *renderer, ZuiTexture *texture,
                                 ZuiRect rect, ZuiColor tint);
 void zui_renderer_draw_glyph(ZuiRenderer *renderer, ZuiTexture *atlas,
