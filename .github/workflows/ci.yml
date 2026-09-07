@@ -29,6 +29,7 @@ jobs:
             libwayland-egl1 \
             libegl1-mesa-dev \
             libgl1-mesa-dev \
+            libxkbcommon-dev \
             ${{ matrix.compiler == 'clang' && 'clang' || '' }}
 
       - name: Configure
@@ -61,6 +62,7 @@ jobs:
             libwayland-egl1 \
             libegl1-mesa-dev \
             libgl1-mesa-dev \
+            libxkbcommon-dev \
             clang-tools
 
       - name: Configure with compile commands
