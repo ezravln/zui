@@ -1,221 +1,340 @@
 #include <zui/internal/widget_internal.h>
+#include <zui/internal/window_internal.h>
 #include <stdlib.h>
 #include <string.h>
 
-ZuiWidget *zui_widget_create(size_t size, ZuiWidgetType type,
-                              const ZuiWidgetVTable *vtable)
+ZuiWidget *zui_widget_create(
+  size_t size,
+  ZuiWidgetType type,
+  const ZuiWidgetVTable *vtable)
 {
-    ZuiWidget *widget = calloc(1, size);
-    if (!widget) return NULL;
+  ZuiWidget *widget = calloc(1, size);
+  if (!widget) {
+    return NULL;
+  }
 
-    widget->type = type;
-    widget->vtable = vtable;
-    widget->visible = true;
-    widget->background = ZUI_COLOR(0, 0, 0, 0);
-    widget->layout_dir = ZUI_LAYOUT_HORIZONTAL;
-    widget->align = ZUI_ALIGN_START;
+  widget->type = type;
+  widget->vtable = vtable;
+  widget->visible = true;
+  widget->background = ZUI_COLOR(0, 0, 0, 0);
+  widget->layout_dir = ZUI_LAYOUT_HORIZONTAL;
+  widget->align = ZUI_ALIGN_START;
 
-    return widget;
+  return widget;
 }
 
 void zui_widget_destroy(ZuiWidget *widget)
 {
-    if (!widget) return;
+  if (!widget) {
+    return;
+  }
 
-    for (int i = 0; i < widget->child_count; i++) {
-        zui_widget_destroy(widget->children[i]);
-    }
+  for (int i = 0; i < widget->child_count; i++) {
+    zui_widget_destroy(widget->children[i]);
+  }
 
-    if (widget->vtable && widget->vtable->destroy) {
-        widget->vtable->destroy(widget);
-    }
+  if (widget->vtable && widget->vtable->destroy) {
+    widget->vtable->destroy(widget);
+  }
 
-    free(widget);
+  free(widget);
 }
 
 void zui_widget_add_child(ZuiWidget *parent, ZuiWidget *child)
 {
-    if (!parent || !child) return;
-    if (parent->child_count >= ZUI_MAX_CHILDREN) return;
+  if (!parent || !child || parent->child_count >= ZUI_MAX_CHILDREN) {
+    return;
+  }
 
-    child->parent = parent;
-    parent->children[parent->child_count++] = child;
-    zui_widget_invalidate(parent);
+  child->parent = parent;
+  parent->children[parent->child_count++] = child;
+  zui_widget_invalidate(parent);
 }
 
 void zui_widget_remove_child(ZuiWidget *parent, ZuiWidget *child)
 {
-    if (!parent || !child) return;
+  if (!parent || !child) {
+    return;
+  }
 
-    for (int i = 0; i < parent->child_count; i++) {
-        if (parent->children[i] == child) {
-            child->parent = NULL;
-            for (int j = i; j < parent->child_count - 1; j++) {
-                parent->children[j] = parent->children[j + 1];
-            }
-            parent->child_count--;
-            zui_widget_invalidate(parent);
-            return;
-        }
+  for (int i = 0; i < parent->child_count; i++) {
+    if (parent->children[i] == child) {
+      child->parent = NULL;
+      for (int j = i; j < parent->child_count - 1; j++) {
+        parent->children[j] = parent->children[j + 1];
+      }
+      parent->child_count--;
+      zui_widget_invalidate(parent);
+      return;
     }
+  }
 }
 
 void zui_widget_draw(ZuiWidget *widget, ZuiRenderer *renderer)
 {
-    if (!widget || !widget->visible) return;
+  if (!widget || !widget->visible) {
+    return;
+  }
 
-    if (widget->background.a > 0.0f) {
-        ZuiRect rect = ZUI_RECT(widget->bounds.x, widget->bounds.y,
-                                 widget->bounds.width, widget->bounds.height);
-        if (widget->corner_radius > 0.0f) {
-            switch (widget->corner_mode) {
-            case ZUI_CORNERS_TOP:
-                zui_renderer_draw_rounded_rect_top(renderer, rect,
-                    widget->background, widget->corner_radius);
-                break;
-            case ZUI_CORNERS_BOTTOM:
-                zui_renderer_draw_rounded_rect_bottom(renderer, rect,
-                    widget->background, widget->corner_radius);
-                break;
-            case ZUI_CORNERS_NONE:
-                zui_renderer_draw_rect(renderer, rect, widget->background);
-                break;
-            default:
-                zui_renderer_draw_rounded_rect(renderer, rect,
-                    widget->background, widget->corner_radius);
-                break;
-            }
-        } else {
-            zui_renderer_draw_rect(renderer, rect, widget->background);
-        }
+  if (widget->background.a > 0.0f) {
+    ZuiRect rect = ZUI_RECT(
+      widget->bounds.x,
+      widget->bounds.y,
+      widget->bounds.width,
+      widget->bounds.height);
+
+    if (widget->corner_radius > 0.0f) {
+      switch (widget->corner_mode) {
+      case ZUI_CORNERS_TOP:
+        zui_renderer_draw_rounded_rect_top(renderer, rect,
+          widget->background, widget->corner_radius);
+        break;
+      case ZUI_CORNERS_BOTTOM:
+        zui_renderer_draw_rounded_rect_bottom(renderer, rect,
+          widget->background, widget->corner_radius);
+        break;
+      case ZUI_CORNERS_NONE:
+        zui_renderer_draw_rect(renderer, rect, widget->background);
+        break;
+      default:
+        zui_renderer_draw_rounded_rect(renderer, rect,
+          widget->background, widget->corner_radius);
+        break;
+      }
+    } else {
+      zui_renderer_draw_rect(renderer, rect, widget->background);
+    }
+  }
+
+  if (widget->vtable && widget->vtable->draw) {
+    widget->vtable->draw(widget, renderer);
+  }
+
+  if (widget->child_count > 0) {
+    zui_renderer_push_clip(
+      renderer,
+      ZUI_RECT(
+        widget->bounds.x,
+        widget->bounds.y,
+        widget->bounds.width,
+        widget->bounds.height),
+      widget->corner_radius);
+
+    for (int i = 0; i < widget->child_count; i++) {
+      zui_widget_draw(widget->children[i], renderer);
     }
 
-    if (widget->vtable && widget->vtable->draw) {
-        widget->vtable->draw(widget, renderer);
-    }
-
-    if (widget->child_count > 0) {
-        zui_renderer_push_clip(renderer, ZUI_RECT(
-            widget->bounds.x, widget->bounds.y,
-            widget->bounds.width, widget->bounds.height),
-            widget->corner_radius);
-
-        for (int i = 0; i < widget->child_count; i++) {
-            zui_widget_draw(widget->children[i], renderer);
-        }
-
-        zui_renderer_pop_clip(renderer);
-    }
+    zui_renderer_pop_clip(renderer);
+  }
 }
 
 void zui_widget_layout(ZuiWidget *widget)
 {
-    if (!widget) return;
+  if (!widget) {
+    return;
+  }
 
-    for (int i = 0; i < widget->child_count; i++) {
-        ZuiWidget *child = widget->children[i];
-        if (child->fill_width) {
-            child->preferred_size.width = widget->bounds.width;
-        }
-        if (child->fill_height) {
-            child->preferred_size.height = widget->bounds.height;
-        }
+  for (int i = 0; i < widget->child_count; i++) {
+    ZuiWidget *child = widget->children[i];
+    if (child->fill_width) {
+      child->preferred_size.width = widget->bounds.width;
     }
-
-    if (widget->vtable && widget->vtable->layout) {
-        widget->vtable->layout(widget);
+    if (child->fill_height) {
+      child->preferred_size.height = widget->bounds.height;
     }
+  }
 
-    widget->needs_layout = false;
+  if (widget->vtable && widget->vtable->layout) {
+    widget->vtable->layout(widget);
+  }
 
-    for (int i = 0; i < widget->child_count; i++) {
-        zui_widget_layout(widget->children[i]);
-    }
+  widget->needs_layout = false;
+
+  for (int i = 0; i < widget->child_count; i++) {
+    zui_widget_layout(widget->children[i]);
+  }
 }
 
 bool zui_widget_contains_point(ZuiWidget *widget, float x, float y)
 {
-    if (!widget || !widget->visible) return false;
-    return x >= widget->bounds.x &&
-           x < widget->bounds.x + widget->bounds.width &&
-           y >= widget->bounds.y &&
-           y < widget->bounds.y + widget->bounds.height;
+  if (!widget || !widget->visible) {
+    return false;
+  }
+
+  return
+    x >= widget->bounds.x &&
+    x < widget->bounds.x + widget->bounds.width &&
+    y >= widget->bounds.y &&
+    y < widget->bounds.y + widget->bounds.height;
 }
 
 ZuiWidget *zui_widget_hit_test(ZuiWidget *widget, float x, float y)
 {
-    if (!widget || !widget->visible) return NULL;
-    if (!zui_widget_contains_point(widget, x, y)) return NULL;
+  if (!widget || !widget->visible) {
+    return NULL;
+  }
+  if (!zui_widget_contains_point(widget, x, y)) {
+    return NULL;
+  }
 
+  if (widget->vtable && widget->vtable->hit_test_children) {
+    ZuiWidget *hit = widget->vtable->hit_test_children(widget, x, y);
+    if (hit) {
+      return hit;
+    }
+  } else {
     for (int i = widget->child_count - 1; i >= 0; i--) {
-        ZuiWidget *hit = zui_widget_hit_test(widget->children[i], x, y);
-        if (hit) return hit;
+      ZuiWidget *hit = zui_widget_hit_test(widget->children[i], x, y);
+      if (hit) {
+        return hit;
+      }
     }
+  }
 
-    if (widget->vtable && widget->vtable->hit_test) {
-        if (widget->vtable->hit_test(widget, x, y)) {
-            return widget;
-        }
+  if (widget->vtable && widget->vtable->hit_test) {
+    if (widget->vtable->hit_test(widget, x, y)) {
+      return widget;
     }
+  }
 
-    return widget;
+  return widget;
 }
 
-void zui_widget_set_bounds(ZuiWidget *widget, float x, float y,
-                            float width, float height)
+void zui_widget_set_bounds(
+  ZuiWidget *widget,
+  float x,
+  float y,
+  float width,
+  float height)
 {
-    if (!widget) return;
-    widget->bounds.x = x;
-    widget->bounds.y = y;
-    widget->bounds.width = width;
-    widget->bounds.height = height;
+  if (!widget) {
+    return;
+  }
+  widget->bounds.x = x;
+  widget->bounds.y = y;
+  widget->bounds.width = width;
+  widget->bounds.height = height;
 }
 
-void zui_widget_set_background(ZuiWidget *widget, ZuiColor color)
+void zui_set_visible(ZuiWidget *widget, bool visible)
 {
-    if (!widget) return;
-    widget->background = color;
+  if (!widget) return;
+  widget->visible = visible;
+  zui_widget_invalidate(widget);
 }
 
-void zui_widget_set_corner_radius(ZuiWidget *widget, float radius)
+void zui_set_background(ZuiWidget *widget, ZuiColor color)
 {
-    if (!widget) return;
-    widget->corner_radius = radius;
+  if (!widget) return;
+  widget->background = color;
 }
 
-void zui_widget_set_padding(ZuiWidget *widget, float padding)
+void zui_set_corner_radius(ZuiWidget *widget, float radius)
 {
-    if (!widget) return;
-    widget->padding = padding;
-    zui_widget_invalidate(widget);
+  if (!widget) return;
+  widget->corner_radius = radius;
 }
 
-void zui_widget_set_spacing(ZuiWidget *widget, float spacing)
+void zui_set_cursor(ZuiWidget *widget, ZuiCursor cursor)
 {
-    if (!widget) return;
-    widget->spacing = spacing;
-    zui_widget_invalidate(widget);
+  if (!widget) return;
+  widget->cursor = cursor;
 }
 
-void zui_widget_set_fill(ZuiWidget *widget, bool fill_width, bool fill_height)
+void zui_set_fill(ZuiWidget *widget, bool fill_width, bool fill_height)
 {
-    if (!widget) return;
-    widget->fill_width = fill_width;
-    widget->fill_height = fill_height;
-    zui_widget_invalidate(widget);
+  if (!widget) return;
+  widget->fill_width = fill_width;
+  widget->fill_height = fill_height;
+  zui_widget_invalidate(widget);
+}
+
+void zui_set_size(ZuiWidget *widget, float width, float height)
+{
+  if (!widget) return;
+  widget->preferred_size.width = width;
+  widget->preferred_size.height = height;
+  zui_widget_invalidate(widget);
+}
+
+void zui_set_padding(ZuiWidget *widget, float padding)
+{
+  if (!widget) return;
+  widget->padding = padding;
+  zui_widget_invalidate(widget);
+}
+
+void zui_set_spacing(ZuiWidget *widget, float spacing)
+{
+  if (!widget) return;
+  widget->spacing = spacing;
+  zui_widget_invalidate(widget);
 }
 
 void zui_widget_invalidate(ZuiWidget *widget)
 {
-    if (!widget) return;
-    widget->needs_layout = true;
-    if (widget->parent) {
-        zui_widget_invalidate(widget->parent);
-    }
+  if (!widget) {
+    return;
+  }
+  widget->needs_layout = true;
+  if (widget->parent) {
+    zui_widget_invalidate(widget->parent);
+  }
 }
 
 bool zui_widget_needs_layout(ZuiWidget *widget)
 {
-    if (!widget) return false;
-    return widget->needs_layout;
+  if (!widget) {
+    return false;
+  }
+  return widget->needs_layout;
+}
+
+static ZuiWindow *find_parent_window(ZuiWidget *widget)
+{
+  while (widget) {
+    if (widget->type == ZUI_WIDGET_WINDOW) {
+      return (ZuiWindow *)widget;
+    }
+    widget = widget->parent;
+  }
+  return NULL;
+}
+
+void zui_widget_focus(ZuiWidget *widget)
+{
+  if (!widget) return;
+
+  ZuiWindow *window = find_parent_window(widget);
+  if (!window) return;
+
+  if (window->focused == widget) return;
+
+  if (window->focused && window->focused->vtable &&
+      window->focused->vtable->on_focus) {
+    window->focused->vtable->on_focus(window->focused, false);
+  }
+
+  window->focused = widget;
+
+  if (widget->vtable && widget->vtable->on_focus) {
+    widget->vtable->on_focus(widget, true);
+  }
+
+  window->needs_redraw = true;
+}
+
+void zui_widget_unfocus(ZuiWidget *widget)
+{
+  if (!widget) return;
+
+  ZuiWindow *window = find_parent_window(widget);
+  if (!window || window->focused != widget) return;
+
+  if (widget->vtable && widget->vtable->on_focus) {
+    widget->vtable->on_focus(widget, false);
+  }
+
+  window->focused = NULL;
+  window->needs_redraw = true;
 }
