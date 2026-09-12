@@ -1,11 +1,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
+#include <webp/decode.h>
 
 #include <zui/internal/widget_internal.h>
 #include <zui/internal/renderer.h>
 #include <zui/image.h>
+#include <zui/resource.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 struct ZuiImage {
   ZuiWidget base;
@@ -42,15 +45,88 @@ static const ZuiWidgetVTable image_vtable = {
   .destroy = image_destroy,
 };
 
+static bool is_webp_file(const char *path)
+{
+  if (!path) return false;
+  size_t len = strlen(path);
+  if (len < 5) return false;
+  const char *ext = path + len - 5;
+  return (strcmp(ext, ".webp") == 0 || strcmp(ext, ".WEBP") == 0);
+}
+
+static bool is_webp_data(const unsigned char *data, int len)
+{
+  if (!data || len < 12) return false;
+  return (data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+          data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P');
+}
+
+static unsigned char *load_webp_file(const char *path, int *width, int *height)
+{
+  FILE *f = fopen(path, "rb");
+  if (!f) return NULL;
+
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  if (size <= 0) {
+    fclose(f);
+    return NULL;
+  }
+
+  uint8_t *file_data = malloc((size_t)size);
+  if (!file_data) {
+    fclose(f);
+    return NULL;
+  }
+
+  if (fread(file_data, 1, (size_t)size, f) != (size_t)size) {
+    free(file_data);
+    fclose(f);
+    return NULL;
+  }
+  fclose(f);
+
+  unsigned char *pixels = WebPDecodeRGBA(file_data, (size_t)size, width, height);
+  free(file_data);
+
+  return pixels;
+}
+
+static unsigned char *load_webp_memory(const unsigned char *data, int len, int *width, int *height)
+{
+  if (!data || len <= 0) return NULL;
+  return WebPDecodeRGBA(data, (size_t)len, width, height);
+}
+
 ZuiImage *zui_image_create(const char *path)
 {
   if (!path) {
     return NULL;
   }
 
-  int width, height, channels;
-  stbi_set_flip_vertically_on_load(0);
-  unsigned char *data = stbi_load(path, &width, &height, &channels, 4);
+  /* Check for resource path */
+  if (zui_is_resource_path(path)) {
+    size_t size;
+    const unsigned char *res_data = zui_resource_get(path, &size);
+    if (res_data && size > 0) {
+      return zui_image_create_from_memory(res_data, (int)size);
+    }
+    return NULL;
+  }
+
+  int width, height;
+  unsigned char *data = NULL;
+  bool is_webp = is_webp_file(path);
+
+  if (is_webp) {
+    data = load_webp_file(path, &width, &height);
+  } else {
+    int channels;
+    stbi_set_flip_vertically_on_load(0);
+    data = stbi_load(path, &width, &height, &channels, 4);
+  }
 
   if (!data) {
     return NULL;
@@ -60,7 +136,11 @@ ZuiImage *zui_image_create(const char *path)
     sizeof(ZuiImage), ZUI_WIDGET_IMAGE, &image_vtable);
 
   if (!image) {
-    stbi_image_free(data);
+    if (is_webp) {
+      WebPFree(data);
+    } else {
+      stbi_image_free(data);
+    }
     return NULL;
   }
 
@@ -69,7 +149,12 @@ ZuiImage *zui_image_create(const char *path)
   image->owns_data = true;
 
   image->texture = zui_texture_create(data, width, height);
-  stbi_image_free(data);
+
+  if (is_webp) {
+    WebPFree(data);
+  } else {
+    stbi_image_free(data);
+  }
 
   image->base.preferred_size.width = (float)width;
   image->base.preferred_size.height = (float)height;
@@ -83,9 +168,17 @@ ZuiImage *zui_image_create_from_memory(const unsigned char *data, int len)
     return NULL;
   }
 
-  int width, height, channels;
-  stbi_set_flip_vertically_on_load(0);
-  unsigned char *pixels = stbi_load_from_memory(data, len, &width, &height, &channels, 4);
+  int width, height;
+  unsigned char *pixels = NULL;
+  bool is_webp = is_webp_data(data, len);
+
+  if (is_webp) {
+    pixels = load_webp_memory(data, len, &width, &height);
+  } else {
+    int channels;
+    stbi_set_flip_vertically_on_load(0);
+    pixels = stbi_load_from_memory(data, len, &width, &height, &channels, 4);
+  }
 
   if (!pixels) {
     return NULL;
@@ -95,7 +188,11 @@ ZuiImage *zui_image_create_from_memory(const unsigned char *data, int len)
     sizeof(ZuiImage), ZUI_WIDGET_IMAGE, &image_vtable);
 
   if (!image) {
-    stbi_image_free(pixels);
+    if (is_webp) {
+      WebPFree(pixels);
+    } else {
+      stbi_image_free(pixels);
+    }
     return NULL;
   }
 
@@ -104,7 +201,12 @@ ZuiImage *zui_image_create_from_memory(const unsigned char *data, int len)
   image->owns_data = true;
 
   image->texture = zui_texture_create(pixels, width, height);
-  stbi_image_free(pixels);
+
+  if (is_webp) {
+    WebPFree(pixels);
+  } else {
+    stbi_image_free(pixels);
+  }
 
   image->base.preferred_size.width = (float)width;
   image->base.preferred_size.height = (float)height;
@@ -140,9 +242,14 @@ void zui_image_set_visible(ZuiImage *image, bool visible)
   image->base.visible = visible;
 }
 
-ZuiWidget *zui_image_widget(ZuiImage *image)
+ZuiWidget *zui_image_as_widget(ZuiImage *image)
 {
   return image ? (ZuiWidget *)image : NULL;
+}
+
+ZuiWidget *zui_image_new(const char *path)
+{
+  return (ZuiWidget *)zui_image_create(path);
 }
 
 ZuiTexture zui_image_get_texture(ZuiImage *image)

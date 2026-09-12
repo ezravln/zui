@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="blur">
+  <copyright>
+    SPDX-FileCopyrightText: 2015 Martin Gräßlin
+    SPDX-FileCopyrightText: 2015 Marco Martin
+
+    SPDX-License-Identifier: LGPL-2.1-or-later
+  </copyright>
+
+  <interface name="org_kde_kwin_blur_manager" version="1">
+    <description summary="blur manager">
+      This interface allows a client to request blur behind a surface.
+    </description>
+
+    <request name="create">
+      <description summary="create blur object">
+        Create a blur object for the given surface.
+      </description>
+      <arg name="id" type="new_id" interface="org_kde_kwin_blur"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+
+    <request name="unset">
+      <description summary="remove blur from surface">
+        Remove blur from the surface.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="org_kde_kwin_blur" version="1">
+    <description summary="blur interface">
+      This interface allows a client to set blur region.
+    </description>
+
+    <request name="commit">
+      <description summary="commit blur changes">
+        Apply the blur region to the surface.
+      </description>
+    </request>
+
+    <request name="set_region">
+      <description summary="set blur region">
+        Set the region of the surface to be blurred.
+        If no region is set, the entire surface will be blurred.
+      </description>
+      <arg name="region" type="object" interface="wl_region" allow-null="true"/>
+    </request>
+
+    <request name="release" type="destructor">
+      <description summary="release blur object">
+        Release the blur object.
+      </description>
+    </request>
+  </interface>
+</protocol>

@@ -23,7 +23,7 @@
 > ZUI is under early development. Its API may change without notice. It currently targets Wayland only and does not yet provide an installation package, a stable external-consumption workflow, or an automated test suite.
 
 - [Overview](#overview)
-- [Priview](#preview)
+- [Preview](#preview)
 - [Current Features](#current-features)
 - [Project Status and Limitations](#project-status-and-limitations)
 - [Requirements](#requirements)

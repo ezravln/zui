@@ -10,30 +10,9 @@
 
 #include "protocols/xdg-shell-client-protocol.h"
 #include "protocols/xdg-decoration-unstable-v1-client-protocol.h"
+#include <zui/cursor.h>
 
 typedef struct ZuiWindow ZuiWindow;
-
-typedef enum ZuiCursor {
-  ZUI_CURSOR_DEFAULT,
-  ZUI_CURSOR_POINTER,
-  ZUI_CURSOR_TEXT,
-  ZUI_CURSOR_CROSSHAIR,
-  ZUI_CURSOR_MOVE,
-  ZUI_CURSOR_RESIZE_N,
-  ZUI_CURSOR_RESIZE_S,
-  ZUI_CURSOR_RESIZE_E,
-  ZUI_CURSOR_RESIZE_W,
-  ZUI_CURSOR_RESIZE_NE,
-  ZUI_CURSOR_RESIZE_NW,
-  ZUI_CURSOR_RESIZE_SE,
-  ZUI_CURSOR_RESIZE_SW,
-  ZUI_CURSOR_NOT_ALLOWED,
-  ZUI_CURSOR_GRAB,
-  ZUI_CURSOR_GRABBING,
-  ZUI_CURSOR_COL_RESIZE,
-  ZUI_CURSOR_ROW_RESIZE,
-  ZUI_CURSOR_COUNT
-} ZuiCursor;
 
 typedef struct ZuiPlatform {
   struct wl_display *display;
@@ -109,6 +88,11 @@ void zui_wayland_maximize(ZuiWaylandWindow *wl_win);
 void zui_wayland_unmaximize(ZuiWaylandWindow *wl_win);
 void zui_wayland_set_min_size(ZuiWaylandWindow *wl_win, int width, int height);
 void zui_wayland_set_max_size(ZuiWaylandWindow *wl_win, int width, int height);
+void zui_wayland_show_window_menu(ZuiPlatform *platform, ZuiWaylandWindow *wl_win,
+                                   int x, int y);
+void zui_wayland_set_fullscreen(ZuiWaylandWindow *wl_win, bool fullscreen);
+void zui_wayland_set_decorated(ZuiPlatform *platform, ZuiWaylandWindow *wl_win,
+                                bool decorated);
 
 void zui_platform_set_cursor(ZuiPlatform *platform, ZuiCursor cursor);
 

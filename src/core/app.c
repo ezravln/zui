@@ -14,6 +14,7 @@ typedef struct ZuiApp {
   ZuiEglContext egl;
   ZuiRenderer renderer;
   char shader_path[PATH_MAX];
+  char base_path[PATH_MAX];
   bool initialized;
 } ZuiApp;
 
@@ -22,6 +23,40 @@ static ZuiApp g_app = {0};
 ZuiApp *zui_get_app(void)
 {
   return &g_app;
+}
+
+static bool find_base_path(char *out, size_t size)
+{
+  char exe_path[PATH_MAX];
+  ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+  if (len == -1) return false;
+  exe_path[len] = '\0';
+
+  char *last_slash = strrchr(exe_path, '/');
+  if (last_slash) *last_slash = '\0';
+
+  char test_path[PATH_MAX];
+  snprintf(test_path, sizeof(test_path), "%s/../assets", exe_path);
+  if (access(test_path, F_OK) == 0) {
+    snprintf(out, size, "%s/..", exe_path);
+    return true;
+  }
+
+  snprintf(test_path, sizeof(test_path), "%s/assets", exe_path);
+  if (access(test_path, F_OK) == 0) {
+    strncpy(out, exe_path, size - 1);
+    out[size - 1] = '\0';
+    return true;
+  }
+
+  char cwd[PATH_MAX];
+  if (getcwd(cwd, sizeof(cwd)) && access("assets", F_OK) == 0) {
+    strncpy(out, cwd, size - 1);
+    out[size - 1] = '\0';
+    return true;
+  }
+
+  return false;
 }
 
 static bool find_shader_path(char *out, size_t size)
@@ -61,6 +96,12 @@ static bool find_shader_path(char *out, size_t size)
 bool zui_init(void)
 {
   if (g_app.initialized) return true;
+
+  if (!find_base_path(g_app.base_path, sizeof(g_app.base_path))) {
+    if (getcwd(g_app.base_path, sizeof(g_app.base_path)) == NULL) {
+      strncpy(g_app.base_path, ".", sizeof(g_app.base_path) - 1);
+    }
+  }
 
   if (!find_shader_path(g_app.shader_path, sizeof(g_app.shader_path))) {
     strncpy(g_app.shader_path, "assets/shaders",
@@ -120,4 +161,27 @@ bool zui_init_renderer_if_needed(void)
 {
   if (g_app.renderer.rect_shader != 0) return true;
   return zui_renderer_init(&g_app.renderer, g_app.shader_path);
+}
+
+const char *zui_get_base_path(void)
+{
+  return g_app.base_path;
+}
+
+bool zui_resolve_asset_path(const char *relative_path, char *out, size_t size)
+{
+  if (!relative_path || !out || size == 0) return false;
+
+  if (relative_path[0] == '/') {
+    strncpy(out, relative_path, size - 1);
+    out[size - 1] = '\0';
+    return access(out, F_OK) == 0;
+  }
+
+  snprintf(out, size, "%s/%s", g_app.base_path, relative_path);
+  if (access(out, F_OK) == 0) return true;
+
+  strncpy(out, relative_path, size - 1);
+  out[size - 1] = '\0';
+  return access(out, F_OK) == 0;
 }

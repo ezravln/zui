@@ -7,7 +7,7 @@
 
 typedef struct ZuiWidget ZuiWidget;
 typedef struct ZuiWindow ZuiWindow;
-typedef struct ZuiTitlebar ZuiTitlebar;
+typedef struct ZuiWindowDecoration ZuiWindowDecoration;
 typedef struct ZuiButton ZuiButton;
 typedef struct ZuiLabel ZuiLabel;
 typedef struct ZuiContainer ZuiContainer;
@@ -49,43 +49,11 @@ typedef struct ZuiBounds {
 
 typedef struct ZuiIcon ZuiIcon;
 
-typedef enum ZuiWidgetType {
-  ZUI_WIDGET_CONTAINER,
-  ZUI_WIDGET_WINDOW,
-  ZUI_WIDGET_TITLEBAR,
-  ZUI_WIDGET_BUTTON,
-  ZUI_WIDGET_LABEL,
-  ZUI_WIDGET_ICON,
-  ZUI_WIDGET_IMAGE,
-  ZUI_WIDGET_PANEL,
-  ZUI_WIDGET_CHECKBOX,
-  ZUI_WIDGET_SCROLLVIEW,
-  ZUI_WIDGET_SCROLLER,
-  ZUI_WIDGET_SPLITVIEW,
-  ZUI_WIDGET_RADIOBUTTON,
-  ZUI_WIDGET_TEXTINPUT,
-  ZUI_WIDGET_SLIDER,
-  ZUI_WIDGET_DROPDOWN,
-  ZUI_WIDGET_PROGRESSBAR,
-  ZUI_WIDGET_GRIDVIEW,
-  ZUI_WIDGET_MENUBAR,
-  ZUI_WIDGET_MENU,
-  ZUI_WIDGET_MENUITEM,
-  ZUI_WIDGET_PIE_CHART,
-  ZUI_WIDGET_BAR_CHART,
-  ZUI_WIDGET_LINE_CHART,
-  ZUI_WIDGET_CIRCULAR_PROGRESS,
-  ZUI_WIDGET_VIDEO,
-} ZuiWidgetType;
-
-typedef enum ZuiSplitAnchor {
-  ZUI_SPLIT_ANCHOR_AUTO,
-  ZUI_SPLIT_ANCHOR_START,
-  ZUI_SPLIT_ANCHOR_CENTER,
-  ZUI_SPLIT_ANCHOR_END,
-} ZuiSplitAnchor;
+#include <zui/widget.h>
 
 typedef void (*ZuiClickCallback)(ZuiWidget *widget, void *user_data);
+typedef void (*ZuiMouseButtonCallback)(ZuiWidget *widget, uint32_t button,
+                                        void *user_data);
 typedef void (*ZuiDrawCallback)(ZuiWidget *widget, void *renderer);
 typedef void (*ZuiCheckboxCallback)(ZuiCheckbox *checkbox, bool checked,
                                      void *user_data);

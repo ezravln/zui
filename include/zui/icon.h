@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "color.h"
 
+typedef struct ZuiWidget ZuiWidget;
 typedef struct ZuiIcon ZuiIcon;
 typedef struct ZuiIconSource ZuiIconSource;
 
@@ -15,5 +16,6 @@ void zui_icon_source_destroy(ZuiIconSource *source);
 ZuiIcon *zui_icon_create(ZuiIconSource *source, float size);
 void zui_icon_set_size(ZuiIcon *icon, float size);
 void zui_icon_set_color(ZuiIcon *icon, ZuiColor color);
+ZuiWidget *zui_icon_as_widget(ZuiIcon *icon);
 
 #endif
