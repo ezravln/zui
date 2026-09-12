@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <zui/color.h>
+#include <zui/path.h>
 
 #define ZUI_MAX_CLIP_STACK 16
 
@@ -42,11 +43,18 @@ typedef struct ZuiRenderer {
   GLuint arc_vao;
   GLuint arc_vbo;
 
+  GLuint poly_shader;
+  GLuint poly_vao;
+  GLuint poly_vbo;
+  int poly_vbo_capacity;
+
   int viewport_width;
   int viewport_height;
 
   ZuiClipState clip_stack[ZUI_MAX_CLIP_STACK];
   int clip_stack_top;
+
+  int stencil_level;
 } ZuiRenderer;
 
 bool zui_renderer_init(ZuiRenderer *renderer, const char *shader_path);
@@ -92,6 +100,13 @@ void zui_renderer_draw_glyph(ZuiRenderer *renderer, ZuiTexture *atlas,
 
 void zui_renderer_push_clip(ZuiRenderer *renderer, ZuiRect rect, float radius);
 void zui_renderer_pop_clip(ZuiRenderer *renderer);
+
+void zui_renderer_push_path_clip(ZuiRenderer *renderer, ZuiPath *path);
+void zui_renderer_pop_path_clip(ZuiRenderer *renderer);
+
+void zui_renderer_draw_path(ZuiRenderer *renderer, ZuiPath *path, ZuiColor color);
+void zui_renderer_draw_path_stroke(ZuiRenderer *renderer, ZuiPath *path,
+                                    ZuiColor color, float thickness);
 
 #define ZUI_RECT(x, y, w, h) ((ZuiRect){(x), (y), (w), (h)})
 

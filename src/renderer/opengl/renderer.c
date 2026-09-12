@@ -4,6 +4,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "../../embedded/embedded_shaders.h"
+
 static char *read_file(const char *path)
 {
   FILE *f = fopen(path, "rb");
@@ -56,18 +58,31 @@ static GLuint compile_shader(GLenum type, const char *source)
   return shader;
 }
 
+static char *get_shader_source(const char *shader_path, const char *name)
+{
+  char full_path[512];
+  snprintf(full_path, sizeof(full_path), "%s/%s", shader_path, name);
+
+  char *src = read_file(full_path);
+  if (src) return src;
+
+  const char *embedded = zui_get_embedded_shader(name);
+  if (embedded) {
+    return strdup(embedded);
+  }
+
+  fprintf(stderr, "ZUI: Shader not found: %s\n", name);
+  return NULL;
+}
+
 static GLuint load_shader_program(const char *shader_path,
                                    const char *vert_name,
                                    const char *frag_name)
 {
-  char vert_path[512], frag_path[512];
-  snprintf(vert_path, sizeof(vert_path), "%s/%s", shader_path, vert_name);
-  snprintf(frag_path, sizeof(frag_path), "%s/%s", shader_path, frag_name);
-
-  char *vert_src = read_file(vert_path);
+  char *vert_src = get_shader_source(shader_path, vert_name);
   if (!vert_src) return 0;
 
-  char *frag_src = read_file(frag_path);
+  char *frag_src = get_shader_source(shader_path, frag_name);
   if (!frag_src) {
     free(vert_src);
     return 0;
@@ -226,11 +241,37 @@ bool zui_renderer_init(ZuiRenderer *renderer, const char *shader_path)
 
   glBindVertexArray(0);
 
+  renderer->poly_shader = load_shader_program(shader_path,
+                                               "poly.vert", "poly.frag");
+  if (!renderer->poly_shader) {
+    glDeleteProgram(renderer->arc_shader);
+    glDeleteProgram(renderer->circle_shader);
+    glDeleteProgram(renderer->glyph_shader);
+    glDeleteProgram(renderer->tex_shader);
+    glDeleteProgram(renderer->rect_shader);
+    return false;
+  }
+
+  glGenVertexArrays(1, &renderer->poly_vao);
+  glGenBuffers(1, &renderer->poly_vbo);
+  renderer->poly_vbo_capacity = 0;
+
+  glBindVertexArray(renderer->poly_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, renderer->poly_vbo);
+
+  glEnableVertexAttribArray(0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+
+  glBindVertexArray(0);
+
   return true;
 }
 
 void zui_renderer_shutdown(ZuiRenderer *renderer)
 {
+  if (renderer->poly_vbo) glDeleteBuffers(1, &renderer->poly_vbo);
+  if (renderer->poly_vao) glDeleteVertexArrays(1, &renderer->poly_vao);
+  if (renderer->poly_shader) glDeleteProgram(renderer->poly_shader);
   if (renderer->arc_vbo) glDeleteBuffers(1, &renderer->arc_vbo);
   if (renderer->arc_vao) glDeleteVertexArrays(1, &renderer->arc_vao);
   if (renderer->arc_shader) glDeleteProgram(renderer->arc_shader);
@@ -251,11 +292,13 @@ void zui_renderer_begin(ZuiRenderer *renderer, int width, int height)
   renderer->viewport_width = width;
   renderer->viewport_height = height;
   renderer->clip_stack_top = -1;
+  renderer->stencil_level = 0;
 
   glViewport(0, 0, width, height);
   glEnable(GL_MULTISAMPLE);
   glEnable(GL_BLEND);
   glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+  glDisable(GL_STENCIL_TEST);
 }
 
 void zui_renderer_end(ZuiRenderer *renderer)
@@ -645,4 +688,504 @@ void zui_renderer_pop_clip(ZuiRenderer *renderer)
   } else {
     glDisable(GL_SCISSOR_TEST);
   }
+}
+
+static void draw_path_to_stencil(ZuiRenderer *renderer, ZuiPath *path);
+
+void zui_renderer_push_path_clip(ZuiRenderer *renderer, ZuiPath *path)
+{
+  if (!renderer || !path) return;
+
+  if (renderer->stencil_level == 0) {
+    glEnable(GL_STENCIL_TEST);
+    glClear(GL_STENCIL_BUFFER_BIT);
+  }
+
+  renderer->stencil_level++;
+
+  glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+  glStencilFunc(GL_ALWAYS, renderer->stencil_level, 0xFF);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
+  draw_path_to_stencil(renderer, path);
+
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glStencilFunc(GL_EQUAL, renderer->stencil_level, 0xFF);
+  glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+}
+
+void zui_renderer_pop_path_clip(ZuiRenderer *renderer)
+{
+  if (!renderer || renderer->stencil_level <= 0) return;
+
+  renderer->stencil_level--;
+
+  if (renderer->stencil_level == 0) {
+    glDisable(GL_STENCIL_TEST);
+  } else {
+    glStencilFunc(GL_EQUAL, renderer->stencil_level, 0xFF);
+  }
+}
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+#define PATH_CURVE_SEGMENTS 32
+
+typedef struct {
+  float *data;
+  int count;
+  int capacity;
+} VertexBuffer;
+
+static void vb_init(VertexBuffer *vb)
+{
+  vb->data = NULL;
+  vb->count = 0;
+  vb->capacity = 0;
+}
+
+static void vb_free(VertexBuffer *vb)
+{
+  free(vb->data);
+  vb->data = NULL;
+  vb->count = 0;
+  vb->capacity = 0;
+}
+
+static void vb_push(VertexBuffer *vb, float x, float y)
+{
+  if (vb->count + 2 > vb->capacity) {
+    int new_cap = vb->capacity == 0 ? 64 : vb->capacity * 2;
+    float *new_data = realloc(vb->data, (size_t)new_cap * sizeof(float));
+    if (!new_data) return;
+    vb->data = new_data;
+    vb->capacity = new_cap;
+  }
+  vb->data[vb->count++] = x;
+  vb->data[vb->count++] = y;
+}
+
+static void tessellate_quad_bezier(VertexBuffer *vb, float x0, float y0,
+                                    float cx, float cy, float x1, float y1)
+{
+  for (int i = 1; i <= PATH_CURVE_SEGMENTS; i++) {
+    float t = (float)i / PATH_CURVE_SEGMENTS;
+    float mt = 1.0f - t;
+    float x = mt * mt * x0 + 2.0f * mt * t * cx + t * t * x1;
+    float y = mt * mt * y0 + 2.0f * mt * t * cy + t * t * y1;
+    vb_push(vb, x, y);
+  }
+}
+
+static void tessellate_cubic_bezier(VertexBuffer *vb, float x0, float y0,
+                                     float cx1, float cy1, float cx2, float cy2,
+                                     float x1, float y1)
+{
+  for (int i = 1; i <= PATH_CURVE_SEGMENTS; i++) {
+    float t = (float)i / PATH_CURVE_SEGMENTS;
+    float mt = 1.0f - t;
+    float mt2 = mt * mt;
+    float mt3 = mt2 * mt;
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float x = mt3 * x0 + 3.0f * mt2 * t * cx1 + 3.0f * mt * t2 * cx2 + t3 * x1;
+    float y = mt3 * y0 + 3.0f * mt2 * t * cy1 + 3.0f * mt * t2 * cy2 + t3 * y1;
+    vb_push(vb, x, y);
+  }
+}
+
+static void tessellate_arc(VertexBuffer *vb, float cx, float cy, float radius,
+                            float start_angle, float end_angle)
+{
+  float delta = end_angle - start_angle;
+  int segments = (int)(fabsf(delta) / (float)M_PI * PATH_CURVE_SEGMENTS);
+  if (segments < 4) segments = 4;
+
+  for (int i = 0; i <= segments; i++) {
+    float t = (float)i / (float)segments;
+    float angle = start_angle + t * delta;
+    float x = cx + radius * cosf(angle);
+    float y = cy + radius * sinf(angle);
+    vb_push(vb, x, y);
+  }
+}
+
+static void path_to_vertices(ZuiPath *path, VertexBuffer *vb)
+{
+  int cmd_count;
+  const ZuiPathCommand *cmds = zui_path_get_commands(path, &cmd_count);
+  if (!cmds || cmd_count == 0) return;
+
+  float curr_x = 0, curr_y = 0;
+
+  for (int i = 0; i < cmd_count; i++) {
+    const ZuiPathCommand *cmd = &cmds[i];
+
+    switch (cmd->type) {
+      case ZUI_PATH_MOVE_TO:
+        vb_push(vb, cmd->x, cmd->y);
+        curr_x = cmd->x;
+        curr_y = cmd->y;
+        break;
+
+      case ZUI_PATH_LINE_TO:
+        vb_push(vb, cmd->x, cmd->y);
+        curr_x = cmd->x;
+        curr_y = cmd->y;
+        break;
+
+      case ZUI_PATH_QUAD_TO:
+        tessellate_quad_bezier(vb, curr_x, curr_y,
+                               cmd->cx1, cmd->cy1, cmd->x, cmd->y);
+        curr_x = cmd->x;
+        curr_y = cmd->y;
+        break;
+
+      case ZUI_PATH_CUBIC_TO:
+        tessellate_cubic_bezier(vb, curr_x, curr_y,
+                                cmd->cx1, cmd->cy1,
+                                cmd->cx2, cmd->cy2,
+                                cmd->x, cmd->y);
+        curr_x = cmd->x;
+        curr_y = cmd->y;
+        break;
+
+      case ZUI_PATH_ARC_TO:
+        tessellate_arc(vb, cmd->x, cmd->y, cmd->radius, cmd->cx1, cmd->cy1);
+        curr_x = cmd->x + cmd->radius * cosf(cmd->cy1);
+        curr_y = cmd->y + cmd->radius * sinf(cmd->cy1);
+        break;
+
+      case ZUI_PATH_CLOSE:
+        break;
+    }
+  }
+}
+
+static float cross2d(float ax, float ay, float bx, float by)
+{
+  return ax * by - ay * bx;
+}
+
+static bool is_convex_polygon(const float *verts, int vert_count)
+{
+  if (vert_count < 3) return false;
+
+  int sign = 0;
+  for (int i = 0; i < vert_count; i++) {
+    int j = (i + 1) % vert_count;
+    int k = (i + 2) % vert_count;
+
+    float ax = verts[j * 2] - verts[i * 2];
+    float ay = verts[j * 2 + 1] - verts[i * 2 + 1];
+    float bx = verts[k * 2] - verts[j * 2];
+    float by = verts[k * 2 + 1] - verts[j * 2 + 1];
+
+    float c = cross2d(ax, ay, bx, by);
+    int s = c > 0 ? 1 : (c < 0 ? -1 : 0);
+
+    if (s != 0) {
+      if (sign == 0) {
+        sign = s;
+      } else if (sign != s) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static void triangulate_fan(const float *verts, int vert_count, VertexBuffer *out)
+{
+  for (int i = 1; i < vert_count - 1; i++) {
+    vb_push(out, verts[0], verts[1]);
+    vb_push(out, verts[i * 2], verts[i * 2 + 1]);
+    vb_push(out, verts[(i + 1) * 2], verts[(i + 1) * 2 + 1]);
+  }
+}
+
+static bool point_in_triangle(float px, float py,
+                               float ax, float ay, float bx, float by, float cx, float cy)
+{
+  float v0x = cx - ax, v0y = cy - ay;
+  float v1x = bx - ax, v1y = by - ay;
+  float v2x = px - ax, v2y = py - ay;
+
+  float dot00 = v0x * v0x + v0y * v0y;
+  float dot01 = v0x * v1x + v0y * v1y;
+  float dot02 = v0x * v2x + v0y * v2y;
+  float dot11 = v1x * v1x + v1y * v1y;
+  float dot12 = v1x * v2x + v1y * v2y;
+
+  float inv_denom = 1.0f / (dot00 * dot11 - dot01 * dot01);
+  float u = (dot11 * dot02 - dot01 * dot12) * inv_denom;
+  float v = (dot00 * dot12 - dot01 * dot02) * inv_denom;
+
+  return (u >= 0) && (v >= 0) && (u + v <= 1);
+}
+
+static void triangulate_ear_clipping(const float *verts, int vert_count, VertexBuffer *out)
+{
+  if (vert_count < 3) return;
+
+  int *indices = malloc((size_t)vert_count * sizeof(int));
+  if (!indices) return;
+
+  for (int i = 0; i < vert_count; i++) indices[i] = i;
+
+  int n = vert_count;
+  while (n > 3) {
+    bool found_ear = false;
+
+    for (int i = 0; i < n; i++) {
+      int prev = (i + n - 1) % n;
+      int next = (i + 1) % n;
+
+      int ip = indices[prev];
+      int ic = indices[i];
+      int in = indices[next];
+
+      float ax = verts[ip * 2], ay = verts[ip * 2 + 1];
+      float bx = verts[ic * 2], by = verts[ic * 2 + 1];
+      float cx = verts[in * 2], cy = verts[in * 2 + 1];
+
+      float c = cross2d(bx - ax, by - ay, cx - bx, cy - by);
+      if (c >= 0) continue;
+
+      bool ear = true;
+      for (int j = 0; j < n; j++) {
+        if (j == prev || j == i || j == next) continue;
+        int ij = indices[j];
+        if (point_in_triangle(verts[ij * 2], verts[ij * 2 + 1],
+                              ax, ay, bx, by, cx, cy)) {
+          ear = false;
+          break;
+        }
+      }
+
+      if (ear) {
+        vb_push(out, ax, ay);
+        vb_push(out, bx, by);
+        vb_push(out, cx, cy);
+
+        for (int j = i; j < n - 1; j++) {
+          indices[j] = indices[j + 1];
+        }
+        n--;
+        found_ear = true;
+        break;
+      }
+    }
+
+    if (!found_ear) break;
+  }
+
+  if (n == 3) {
+    vb_push(out, verts[indices[0] * 2], verts[indices[0] * 2 + 1]);
+    vb_push(out, verts[indices[1] * 2], verts[indices[1] * 2 + 1]);
+    vb_push(out, verts[indices[2] * 2], verts[indices[2] * 2 + 1]);
+  }
+
+  free(indices);
+}
+
+static void draw_path_to_stencil(ZuiRenderer *renderer, ZuiPath *path)
+{
+  if (!path) return;
+
+  VertexBuffer outline;
+  vb_init(&outline);
+  path_to_vertices(path, &outline);
+
+  int vert_count = outline.count / 2;
+  if (vert_count < 3) {
+    vb_free(&outline);
+    return;
+  }
+
+  VertexBuffer triangles;
+  vb_init(&triangles);
+
+  if (is_convex_polygon(outline.data, vert_count)) {
+    triangulate_fan(outline.data, vert_count, &triangles);
+  } else {
+    triangulate_ear_clipping(outline.data, vert_count, &triangles);
+  }
+
+  vb_free(&outline);
+
+  if (triangles.count == 0) {
+    vb_free(&triangles);
+    return;
+  }
+
+  glUseProgram(renderer->poly_shader);
+  glBindVertexArray(renderer->poly_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, renderer->poly_vbo);
+
+  int needed = triangles.count * (int)sizeof(float);
+  if (needed > renderer->poly_vbo_capacity) {
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)needed, triangles.data, GL_DYNAMIC_DRAW);
+    renderer->poly_vbo_capacity = needed;
+  } else {
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)needed, triangles.data);
+  }
+
+  GLint res_loc = glGetUniformLocation(renderer->poly_shader, "u_resolution");
+  glUniform2f(res_loc, (float)renderer->viewport_width,
+              (float)renderer->viewport_height);
+
+  GLint color_loc = glGetUniformLocation(renderer->poly_shader, "u_color");
+  glUniform4f(color_loc, 1.0f, 1.0f, 1.0f, 1.0f);
+
+  glDrawArrays(GL_TRIANGLES, 0, triangles.count / 2);
+
+  glBindVertexArray(0);
+  glUseProgram(0);
+
+  vb_free(&triangles);
+}
+
+void zui_renderer_draw_path(ZuiRenderer *renderer, ZuiPath *path, ZuiColor color)
+{
+  if (!path) return;
+
+  VertexBuffer outline;
+  vb_init(&outline);
+  path_to_vertices(path, &outline);
+
+  int vert_count = outline.count / 2;
+  if (vert_count < 3) {
+    vb_free(&outline);
+    return;
+  }
+
+  VertexBuffer triangles;
+  vb_init(&triangles);
+
+  if (is_convex_polygon(outline.data, vert_count)) {
+    triangulate_fan(outline.data, vert_count, &triangles);
+  } else {
+    triangulate_ear_clipping(outline.data, vert_count, &triangles);
+  }
+
+  vb_free(&outline);
+
+  if (triangles.count == 0) {
+    vb_free(&triangles);
+    return;
+  }
+
+  glUseProgram(renderer->poly_shader);
+  glBindVertexArray(renderer->poly_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, renderer->poly_vbo);
+
+  int needed = triangles.count * (int)sizeof(float);
+  if (needed > renderer->poly_vbo_capacity) {
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)needed, triangles.data, GL_DYNAMIC_DRAW);
+    renderer->poly_vbo_capacity = needed;
+  } else {
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)needed, triangles.data);
+  }
+
+  GLint res_loc = glGetUniformLocation(renderer->poly_shader, "u_resolution");
+  glUniform2f(res_loc, (float)renderer->viewport_width,
+              (float)renderer->viewport_height);
+
+  GLint color_loc = glGetUniformLocation(renderer->poly_shader, "u_color");
+  glUniform4f(color_loc, color.r * color.a, color.g * color.a,
+              color.b * color.a, color.a);
+
+  apply_clip_uniforms(renderer, renderer->poly_shader);
+
+  glDrawArrays(GL_TRIANGLES, 0, triangles.count / 2);
+
+  glBindVertexArray(0);
+  glUseProgram(0);
+
+  vb_free(&triangles);
+}
+
+void zui_renderer_draw_path_stroke(ZuiRenderer *renderer, ZuiPath *path,
+                                    ZuiColor color, float thickness)
+{
+  if (!path || thickness <= 0) return;
+
+  VertexBuffer outline;
+  vb_init(&outline);
+  path_to_vertices(path, &outline);
+
+  int vert_count = outline.count / 2;
+  if (vert_count < 2) {
+    vb_free(&outline);
+    return;
+  }
+
+  VertexBuffer triangles;
+  vb_init(&triangles);
+
+  float half = thickness / 2.0f;
+
+  for (int i = 0; i < vert_count; i++) {
+    int j = (i + 1) % vert_count;
+
+    float x0 = outline.data[i * 2];
+    float y0 = outline.data[i * 2 + 1];
+    float x1 = outline.data[j * 2];
+    float y1 = outline.data[j * 2 + 1];
+
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.0001f) continue;
+
+    float nx = -dy / len * half;
+    float ny = dx / len * half;
+
+    vb_push(&triangles, x0 + nx, y0 + ny);
+    vb_push(&triangles, x0 - nx, y0 - ny);
+    vb_push(&triangles, x1 + nx, y1 + ny);
+
+    vb_push(&triangles, x0 - nx, y0 - ny);
+    vb_push(&triangles, x1 - nx, y1 - ny);
+    vb_push(&triangles, x1 + nx, y1 + ny);
+  }
+
+  vb_free(&outline);
+
+  if (triangles.count == 0) {
+    vb_free(&triangles);
+    return;
+  }
+
+  glUseProgram(renderer->poly_shader);
+  glBindVertexArray(renderer->poly_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, renderer->poly_vbo);
+
+  int needed = triangles.count * (int)sizeof(float);
+  if (needed > renderer->poly_vbo_capacity) {
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)needed, triangles.data, GL_DYNAMIC_DRAW);
+    renderer->poly_vbo_capacity = needed;
+  } else {
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)needed, triangles.data);
+  }
+
+  GLint res_loc = glGetUniformLocation(renderer->poly_shader, "u_resolution");
+  glUniform2f(res_loc, (float)renderer->viewport_width,
+              (float)renderer->viewport_height);
+
+  GLint color_loc = glGetUniformLocation(renderer->poly_shader, "u_color");
+  glUniform4f(color_loc, color.r * color.a, color.g * color.a,
+              color.b * color.a, color.a);
+
+  apply_clip_uniforms(renderer, renderer->poly_shader);
+
+  glDrawArrays(GL_TRIANGLES, 0, triangles.count / 2);
+
+  glBindVertexArray(0);
+  glUseProgram(0);
+
+  vb_free(&triangles);
 }

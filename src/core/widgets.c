@@ -4,11 +4,24 @@
 #include <zui/internal/icon_internal.h>
 #include <zui/internal/font_internal.h>
 #include <zui/internal/wayland_platform.h>
+#include <zui/resource.h>
+#include <zui/app.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <linux/limits.h>
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+
+static ZuiIconSource *load_icon_resource(const char *res_path)
+{
+  size_t size;
+  const unsigned char *data = zui_resource_get(res_path, &size);
+  if (data && size > 0) {
+    return zui_icon_load_svg_data((const char *)data);
+  }
+  return NULL;
+}
 
 extern ZuiPlatform *zui_get_platform(void);
 
@@ -260,7 +273,7 @@ static ZuiIconButton *create_icon_button(const char *svg_path, float icon_size,
 
   btn->icon_size = icon_size;
   btn->icon_color = icon_color;
-  btn->icon_source = zui_icon_load_svg(svg_path);
+  btn->icon_source = load_icon_resource(svg_path);
 
   if (btn->icon_source) {
     btn->icon_texture = zui_texture_create(btn->icon_source->raster_data,
@@ -336,7 +349,12 @@ void zui_button_set_icon(ZuiButton *button, const char *image_path, float size)
     zui_texture_destroy(&button->icon_texture);
   }
 
-  button->icon_texture = zui_texture_load(image_path);
+  char resolved_path[PATH_MAX];
+  if (zui_resolve_asset_path(image_path, resolved_path, sizeof(resolved_path))) {
+    button->icon_texture = zui_texture_load(resolved_path);
+  } else {
+    button->icon_texture = zui_texture_load(image_path);
+  }
   button->icon_size = size;
 }
 
@@ -344,6 +362,21 @@ void zui_button_set_text_color(ZuiButton *button, ZuiColor color)
 {
   if (!button) return;
   button->text_color = color;
+}
+
+const char *zui_button_get_text(ZuiButton *button)
+{
+  return button ? button->text : NULL;
+}
+
+ZuiWidget *zui_button_as_widget(ZuiButton *button)
+{
+  return (ZuiWidget *)button;
+}
+
+ZuiWidget *zui_button_new(const char *text)
+{
+  return (ZuiWidget *)zui_button_create(text);
 }
 
 static void label_draw(ZuiWidget *widget, ZuiRenderer *renderer)
@@ -499,7 +532,7 @@ ZuiCheckbox *zui_checkbox_create(const char *label)
   cb->on_change = NULL;
   cb->change_user_data = NULL;
 
-  cb->check_icon = zui_icon_load_svg("assets/icons/x-check-icon.svg");
+  cb->check_icon = load_icon_resource("res:/zui/icons/check.svg");
   if (cb->check_icon) {
     cb->check_texture = zui_texture_create(cb->check_icon->raster_data,
                                             cb->check_icon->raster_width,
@@ -589,13 +622,23 @@ void zui_checkbox_set_icon(ZuiCheckbox *checkbox, const char *svg_path)
     zui_icon_source_destroy(checkbox->check_icon);
   }
 
-  checkbox->check_icon = zui_icon_load_svg(svg_path);
+  checkbox->check_icon = load_icon_resource(svg_path);
   if (checkbox->check_icon) {
     checkbox->check_texture = zui_texture_create(
       checkbox->check_icon->raster_data,
       checkbox->check_icon->raster_width,
       checkbox->check_icon->raster_height);
   }
+}
+
+ZuiWidget *zui_checkbox_as_widget(ZuiCheckbox *checkbox)
+{
+  return (ZuiWidget *)checkbox;
+}
+
+ZuiWidget *zui_checkbox_new(const char *label)
+{
+  return (ZuiWidget *)zui_checkbox_create(label);
 }
 
 struct ZuiRadioGroup {
@@ -1450,6 +1493,11 @@ ZuiWidget *zui_textinput_as_widget(ZuiTextInput *input)
   return (ZuiWidget *)input;
 }
 
+ZuiWidget *zui_textinput_new(const char *placeholder)
+{
+  return (ZuiWidget *)zui_textinput_create(placeholder);
+}
+
 typedef void (*ZuiScrollViewCallback)(ZuiScrollView *sv, float x, float y,
                                        void *user_data);
 
@@ -1646,6 +1694,11 @@ void zui_scrollview_on_scroll(ZuiScrollView *sv, ZuiScrollViewCallback callback,
 ZuiWidget *zui_scrollview_as_widget(ZuiScrollView *sv)
 {
   return (ZuiWidget *)sv;
+}
+
+ZuiWidget *zui_scrollview_new(void)
+{
+  return (ZuiWidget *)zui_scrollview_create();
 }
 
 struct ZuiScroller {
@@ -1932,6 +1985,11 @@ void zui_scroller_on_change(ZuiScroller *scroller, ZuiScrollerCallback callback,
 ZuiWidget *zui_scroller_as_widget(ZuiScroller *scroller)
 {
   return (ZuiWidget *)scroller;
+}
+
+ZuiWidget *zui_scroller_new(bool vertical)
+{
+  return (ZuiWidget *)zui_scroller_create(vertical);
 }
 
 struct ZuiSplitView {
@@ -2437,6 +2495,11 @@ ZuiWidget *zui_splitview_as_widget(ZuiSplitView *sv)
   return (ZuiWidget *)sv;
 }
 
+ZuiWidget *zui_splitview_new(bool vertical)
+{
+  return (ZuiWidget *)zui_splitview_create(vertical);
+}
+
 static ZuiFont *g_default_font = NULL;
 
 static ZuiFont *get_default_font(void)
@@ -2527,9 +2590,9 @@ void zui_label_set_size(ZuiLabel *label, float size)
   }
 }
 
-float zui_get_font_size(ZuiLabel *label)
+float zui_label_get_font_size(ZuiLabel *label)
 {
-  if (!label) return 0.0f;
+  if (!label || !label->font) return 0.0f;
   return label->font->size;
 }
 
@@ -2570,6 +2633,21 @@ void zui_label_set_color(ZuiLabel *label, ZuiColor color)
   label->text_color = color;
 }
 
+const char *zui_label_get_text(ZuiLabel *label)
+{
+  return label ? label->text : NULL;
+}
+
+ZuiWidget *zui_label_as_widget(ZuiLabel *label)
+{
+  return (ZuiWidget *)label;
+}
+
+ZuiWidget *zui_label_new(const char *text)
+{
+  return (ZuiWidget *)zui_label_create(text);
+}
+
 static void close_button_click(ZuiWidget *widget, void *user_data)
 {
   ZuiWindow *window = user_data;
@@ -2598,7 +2676,7 @@ static void maximize_button_click(ZuiWidget *widget, void *user_data)
 
 ZuiWidget *zui_window_close_button(ZuiWindow *window)
 {
-  ZuiIconButton *btn = create_icon_button("assets/icons/x-exit-icon.svg",
+  ZuiIconButton *btn = create_icon_button("res:/zui/icons/close.svg",
                                            12.0f, ZUI_COLOR_RGB(1.0f, 1.0f, 1.0f));
   if (!btn) return NULL;
 
@@ -2616,7 +2694,7 @@ ZuiWidget *zui_window_close_button(ZuiWindow *window)
 
 ZuiWidget *zui_window_minimize_button(ZuiWindow *window)
 {
-  ZuiIconButton *btn = create_icon_button("assets/icons/x-minimize-icon.svg",
+  ZuiIconButton *btn = create_icon_button("res:/zui/icons/minimize.svg",
                                            12.0f, ZUI_COLOR_RGB(0.9f, 0.9f, 0.9f));
   if (!btn) return NULL;
 
@@ -2652,8 +2730,8 @@ ZuiWidget *zui_window_maximize_button(ZuiWindow *window)
   btn->icon_color = ZUI_COLOR_RGB(1.0f, 1.0f, 1.0f);
   btn->window = window;
 
-  btn->maximize_icon = zui_icon_load_svg("assets/icons/x-maximize-icon.svg");
-  btn->restore_icon = zui_icon_load_svg("assets/icons/x-minimize-icon.svg");
+  btn->maximize_icon = load_icon_resource("res:/zui/icons/maximize.svg");
+  btn->restore_icon = load_icon_resource("res:/zui/icons/restore.svg");
 
   if (btn->maximize_icon) {
     btn->maximize_texture = zui_texture_create(btn->maximize_icon->raster_data,
@@ -2672,7 +2750,7 @@ ZuiWidget *zui_window_maximize_button(ZuiWindow *window)
 
 ZuiWidget *zui_window_hide_button(ZuiWindow *window)
 {
-  ZuiIconButton *btn = create_icon_button("assets/icons/x-hidden-icon.svg",
+  ZuiIconButton *btn = create_icon_button("res:/zui/icons/hidden.svg",
                                            12.0f, ZUI_COLOR_RGB(1.0f, 1.0f, 1.0f));
   if (!btn) return NULL;
 
@@ -2891,6 +2969,11 @@ void zui_slider_on_change(ZuiSlider *slider, ZuiSliderCallback callback,
 ZuiWidget *zui_slider_as_widget(ZuiSlider *slider)
 {
   return (ZuiWidget *)slider;
+}
+
+ZuiWidget *zui_slider_new(float min, float max, float value)
+{
+  return (ZuiWidget *)zui_slider_create(min, max, value);
 }
 
 #define ZUI_DROPDOWN_MAX_ITEMS 64
@@ -3175,8 +3258,8 @@ ZuiDropdown *zui_dropdown_create(const char *placeholder)
   dd->item_height = 32.0f;
   dd->icon_size = 12.0f;
 
-  dd->chevron_down_icon = zui_icon_load_svg("assets/icons/x-chevron-down.svg");
-  dd->chevron_up_icon = zui_icon_load_svg("assets/icons/x-chevron-up.svg");
+  dd->chevron_down_icon = load_icon_resource("res:/zui/icons/chevron-down.svg");
+  dd->chevron_up_icon = load_icon_resource("res:/zui/icons/chevron-up.svg");
 
   if (dd->chevron_down_icon) {
     dd->chevron_down_texture = zui_texture_create(
@@ -3273,6 +3356,11 @@ ZuiWidget *zui_dropdown_as_widget(ZuiDropdown *dropdown)
   return (ZuiWidget *)dropdown;
 }
 
+ZuiWidget *zui_dropdown_new(const char *placeholder)
+{
+  return (ZuiWidget *)zui_dropdown_create(placeholder);
+}
+
 struct ZuiProgressBar {
   ZuiWidget base;
   float value;
@@ -3364,6 +3452,11 @@ void zui_progressbar_set_corner_radius(ZuiProgressBar *bar, float radius)
 ZuiWidget *zui_progressbar_as_widget(ZuiProgressBar *bar)
 {
   return (ZuiWidget *)bar;
+}
+
+ZuiWidget *zui_progressbar_new(void)
+{
+  return (ZuiWidget *)zui_progressbar_create();
 }
 
 /* ========== GridView ========== */
@@ -3673,6 +3766,11 @@ void zui_gridview_get_scroll(ZuiGridView *gv, float *x, float *y)
 ZuiWidget *zui_gridview_as_widget(ZuiGridView *gv)
 {
   return (ZuiWidget *)gv;
+}
+
+ZuiWidget *zui_gridview_new(int columns)
+{
+  return (ZuiWidget *)zui_gridview_create(columns);
 }
 
 /* ========== MenuItem ========== */
@@ -4601,6 +4699,11 @@ ZuiWidget *zui_piechart_as_widget(ZuiPieChart *chart)
   return (ZuiWidget *)chart;
 }
 
+ZuiWidget *zui_piechart_new(void)
+{
+  return (ZuiWidget *)zui_piechart_create();
+}
+
 /* ========== BarChart ========== */
 
 #define ZUI_BARCHART_MAX_BARS 32
@@ -4902,6 +5005,11 @@ ZuiWidget *zui_barchart_as_widget(ZuiBarChart *chart)
   return (ZuiWidget *)chart;
 }
 
+ZuiWidget *zui_barchart_new(void)
+{
+  return (ZuiWidget *)zui_barchart_create();
+}
+
 /* ========== LineChart ========== */
 
 #define ZUI_LINECHART_MAX_POINTS 128
@@ -5033,6 +5141,11 @@ ZuiWidget *zui_linechart_as_widget(ZuiLineChart *chart)
   return (ZuiWidget *)chart;
 }
 
+ZuiWidget *zui_linechart_new(void)
+{
+  return (ZuiWidget *)zui_linechart_create();
+}
+
 /* ========== CircularProgress ========== */
 
 struct ZuiCircularProgress {
@@ -5045,6 +5158,9 @@ struct ZuiCircularProgress {
   bool show_percentage;
   ZuiColor text_color;
   ZuiFont *font;
+  float text_size;
+  ZuiMouseButtonCallback on_click_cb;
+  void *on_click_data;
 };
 
 static void circularprogress_draw(ZuiWidget *widget, ZuiRenderer *renderer)
@@ -5088,9 +5204,21 @@ static void circularprogress_destroy(ZuiWidget *widget)
   free(cp->text);
 }
 
+static void circularprogress_on_mouse_down(ZuiWidget *widget, float x, float y,
+                                            uint32_t button)
+{
+  (void)x;
+  (void)y;
+  ZuiCircularProgress *cp = (ZuiCircularProgress *)widget;
+  if (cp->on_click_cb) {
+    cp->on_click_cb(widget, button, cp->on_click_data);
+  }
+}
+
 static const ZuiWidgetVTable circularprogress_vtable = {
   .draw = circularprogress_draw,
   .destroy = circularprogress_destroy,
+  .on_mouse_down = circularprogress_on_mouse_down,
 };
 
 ZuiCircularProgress *zui_circularprogress_create(void)
@@ -5165,7 +5293,41 @@ void zui_circularprogress_set_text_color(ZuiCircularProgress *cp, ZuiColor color
   if (cp) cp->text_color = color;
 }
 
+void zui_circularprogress_set_text_size(ZuiCircularProgress *cp, float size)
+{
+  if (!cp) return;
+  cp->text_size = size;
+  const char *font_paths[] = {
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/TTF/NotoSans-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+  };
+  for (size_t i = 0; i < sizeof(font_paths) / sizeof(font_paths[0]); i++) {
+    ZuiFont *font = zui_font_load(font_paths[i], size);
+    if (font) {
+      cp->font = font;
+      break;
+    }
+  }
+}
+
+void zui_circularprogress_on_click(ZuiCircularProgress *cp,
+                                    ZuiMouseButtonCallback callback,
+                                    void *user_data)
+{
+  if (!cp) return;
+  cp->on_click_cb = callback;
+  cp->on_click_data = user_data;
+}
+
 ZuiWidget *zui_circularprogress_as_widget(ZuiCircularProgress *cp)
 {
   return (ZuiWidget *)cp;
+}
+
+ZuiWidget *zui_circularprogress_new(void)
+{
+  return (ZuiWidget *)zui_circularprogress_create();
 }

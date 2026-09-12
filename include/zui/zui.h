@@ -9,5 +9,9 @@
 #include "font.h"
 #include "image.h"
 #include "video.h"
+#include "audio.h"
+#include "resource.h"
+#include "path.h"
+#include "shape.h"
 
 #endif

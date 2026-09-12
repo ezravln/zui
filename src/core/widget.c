@@ -216,32 +216,32 @@ void zui_widget_set_bounds(
   widget->bounds.height = height;
 }
 
-void zui_set_visible(ZuiWidget *widget, bool visible)
+void zui_widget_set_visible(ZuiWidget *widget, bool visible)
 {
   if (!widget) return;
   widget->visible = visible;
   zui_widget_invalidate(widget);
 }
 
-void zui_set_background(ZuiWidget *widget, ZuiColor color)
+void zui_widget_set_background(ZuiWidget *widget, ZuiColor color)
 {
   if (!widget) return;
   widget->background = color;
 }
 
-void zui_set_corner_radius(ZuiWidget *widget, float radius)
+void zui_widget_set_corner_radius(ZuiWidget *widget, float radius)
 {
   if (!widget) return;
   widget->corner_radius = radius;
 }
 
-void zui_set_cursor(ZuiWidget *widget, ZuiCursor cursor)
+void zui_widget_set_cursor(ZuiWidget *widget, ZuiCursor cursor)
 {
   if (!widget) return;
   widget->cursor = cursor;
 }
 
-void zui_set_fill(ZuiWidget *widget, bool fill_width, bool fill_height)
+void zui_widget_set_fill(ZuiWidget *widget, bool fill_width, bool fill_height)
 {
   if (!widget) return;
   widget->fill_width = fill_width;
@@ -249,7 +249,7 @@ void zui_set_fill(ZuiWidget *widget, bool fill_width, bool fill_height)
   zui_widget_invalidate(widget);
 }
 
-void zui_set_size(ZuiWidget *widget, float width, float height)
+void zui_widget_set_size(ZuiWidget *widget, float width, float height)
 {
   if (!widget) return;
   widget->preferred_size.width = width;
@@ -257,14 +257,22 @@ void zui_set_size(ZuiWidget *widget, float width, float height)
   zui_widget_invalidate(widget);
 }
 
-void zui_set_padding(ZuiWidget *widget, float padding)
+void zui_widget_set_position(ZuiWidget *widget, float x, float y)
+{
+  if (!widget) return;
+  widget->bounds.x = x;
+  widget->bounds.y = y;
+  zui_widget_invalidate(widget);
+}
+
+void zui_widget_set_padding(ZuiWidget *widget, float padding)
 {
   if (!widget) return;
   widget->padding = padding;
   zui_widget_invalidate(widget);
 }
 
-void zui_set_spacing(ZuiWidget *widget, float spacing)
+void zui_widget_set_spacing(ZuiWidget *widget, float spacing)
 {
   if (!widget) return;
   widget->spacing = spacing;
@@ -337,4 +345,49 @@ void zui_widget_unfocus(ZuiWidget *widget)
 
   window->focused = NULL;
   window->needs_redraw = true;
+}
+
+ZuiWidgetType zui_widget_get_type(ZuiWidget *widget)
+{
+  if (!widget) return ZUI_WIDGET_CONTAINER;
+  return widget->type;
+}
+
+ZuiWidget *zui_widget_get_parent(ZuiWidget *widget)
+{
+  if (!widget) return NULL;
+  return widget->parent;
+}
+
+int zui_widget_get_child_count(ZuiWidget *widget)
+{
+  if (!widget) return 0;
+  return widget->child_count;
+}
+
+ZuiWidget *zui_widget_get_child(ZuiWidget *widget, int index)
+{
+  if (!widget || index < 0 || index >= widget->child_count) return NULL;
+  return widget->children[index];
+}
+
+bool zui_widget_is_visible(ZuiWidget *widget)
+{
+  if (!widget) return false;
+  return widget->visible;
+}
+
+void zui_widget_set_layout(ZuiWidget *widget, ZuiLayoutDir direction)
+{
+  if (!widget) return;
+  widget->layout_dir = direction;
+  zui_widget_invalidate(widget);
+}
+
+void zui_widget_set_alignment(ZuiWidget *widget, ZuiAlign main_axis, ZuiAlign cross_axis)
+{
+  if (!widget) return;
+  widget->align = main_axis;
+  (void)cross_axis;
+  zui_widget_invalidate(widget);
 }

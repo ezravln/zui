@@ -576,15 +576,19 @@ static void xdg_toplevel_configure(void *data, struct xdg_toplevel *toplevel,
   ZuiWaylandWindow *wl_win = zui_window_get_wayland(window);
 
   bool maximized = false;
+  bool fullscreen = false;
   bool activated = false;
   uint32_t *state;
   wl_array_for_each(state, states) {
     if (*state == XDG_TOPLEVEL_STATE_MAXIMIZED)
       maximized = true;
+    if (*state == XDG_TOPLEVEL_STATE_FULLSCREEN)
+      fullscreen = true;
     if (*state == XDG_TOPLEVEL_STATE_ACTIVATED)
       activated = true;
   }
   zui_window_set_maximized_state(window, maximized);
+  zui_window_set_fullscreen_state(window, fullscreen);
   zui_window_set_active_state(window, activated);
 
   if (width > 0 && height > 0) {
@@ -623,6 +627,12 @@ static void decoration_configure(void *data,
                                   struct zxdg_toplevel_decoration_v1 *decoration,
                                   uint32_t mode)
 {
+  (void)decoration;
+  ZuiWindow *window = data;
+  if (!window) return;
+
+  bool client_side = (mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+  zui_window_set_decorated_state(window, client_side);
 }
 
 static const struct zxdg_toplevel_decoration_v1_listener decoration_listener = {
@@ -764,6 +774,41 @@ void zui_wayland_set_max_size(ZuiWaylandWindow *wl_win, int width, int height)
 {
   if (wl_win->xdg_toplevel) {
     xdg_toplevel_set_max_size(wl_win->xdg_toplevel, width, height);
+  }
+}
+
+void zui_wayland_show_window_menu(ZuiPlatform *platform, ZuiWaylandWindow *wl_win,
+                                   int x, int y)
+{
+  if (wl_win->xdg_toplevel && platform->seat) {
+    xdg_toplevel_show_window_menu(wl_win->xdg_toplevel, platform->seat,
+                                   platform->pointer_serial, x, y);
+  }
+}
+
+void zui_wayland_set_fullscreen(ZuiWaylandWindow *wl_win, bool fullscreen)
+{
+  if (!wl_win->xdg_toplevel) return;
+
+  if (fullscreen) {
+    xdg_toplevel_set_fullscreen(wl_win->xdg_toplevel, NULL);
+  } else {
+    xdg_toplevel_unset_fullscreen(wl_win->xdg_toplevel);
+  }
+}
+
+void zui_wayland_set_decorated(ZuiPlatform *platform, ZuiWaylandWindow *wl_win,
+                                bool decorated)
+{
+  (void)platform;
+  if (!wl_win->decoration) return;
+
+  if (decorated) {
+    zxdg_toplevel_decoration_v1_set_mode(wl_win->decoration,
+      ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+  } else {
+    zxdg_toplevel_decoration_v1_set_mode(wl_win->decoration,
+      ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
   }
 }
 

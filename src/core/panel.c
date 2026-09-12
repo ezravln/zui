@@ -332,3 +332,8 @@ ZuiWidget *zui_panel_as_widget(ZuiPanel *panel)
 {
   return &panel->base;
 }
+
+ZuiWidget *zui_panel_new(void)
+{
+  return (ZuiWidget *)zui_panel_create();
+}

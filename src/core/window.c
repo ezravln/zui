@@ -1,16 +1,20 @@
 #include <zui/internal/window_internal.h>
+#include <zui/internal/font_internal.h>
 #include <zui/image.h>
+#include <zui/font.h>
+#include <zui/app.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
+#include <linux/limits.h>
 #include <linux/input-event-codes.h>
 
-#define ZUI_DEFAULT_LOGO_PATH "assets/logo/zui-logo-white.png"
-#define ZUI_DEFAULT_LOGO_SIZE 14.0f
 #define ZUI_DEFAULT_MIN_WIDTH 200
 #define ZUI_DEFAULT_MIN_HEIGHT 35
 #define ZUI_RESIZE_BORDER 6.0f
 #define ZUI_RESIZE_CORNER 12.0f
+#define ZUI_HANDLER_INITIAL_CAPACITY 4
 
 extern ZuiPlatform *zui_get_platform(void);
 extern ZuiEglContext *zui_get_egl(void);
@@ -21,7 +25,45 @@ static ZuiWidget *g_hovered_widget = NULL;
 static ZuiWidget *g_pressed_widget = NULL;
 static uint32_t g_resize_edge = 0;
 
+#define ZUI_DOUBLE_CLICK_TIME_MS 400
+#define ZUI_DOUBLE_CLICK_DISTANCE 5
+
+static struct timespec g_last_click_time = {0};
+static double g_last_click_x = 0;
+static double g_last_click_y = 0;
+static ZuiWindow *g_last_click_window = NULL;
+
+static long get_time_ms(void)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static bool is_double_click(ZuiWindow *window, double x, double y)
+{
+  long now = get_time_ms();
+  long last = g_last_click_time.tv_sec * 1000 + g_last_click_time.tv_nsec / 1000000;
+  long elapsed = now - last;
+
+  double dx = x - g_last_click_x;
+  double dy = y - g_last_click_y;
+  double dist = dx * dx + dy * dy;
+
+  bool is_dbl = (window == g_last_click_window &&
+                 elapsed < ZUI_DOUBLE_CLICK_TIME_MS &&
+                 dist < ZUI_DOUBLE_CLICK_DISTANCE * ZUI_DOUBLE_CLICK_DISTANCE);
+
+  clock_gettime(CLOCK_MONOTONIC, &g_last_click_time);
+  g_last_click_x = x;
+  g_last_click_y = y;
+  g_last_click_window = window;
+
+  return is_dbl;
+}
+
 static bool overlay_hit_test(ZuiWidget *overlay, float x, float y);
+void zui_window_maximize(ZuiWindow *window);
 
 static uint32_t detect_resize_edge(ZuiWindow *window, float x, float y)
 {
@@ -70,12 +112,7 @@ static ZuiCursor resize_edge_to_cursor(uint32_t edge)
   }
 }
 
-static void titlebar_layout(ZuiWidget *widget);
 static void window_layout(ZuiWidget *widget);
-
-static const ZuiWidgetVTable titlebar_vtable = {
-  .layout = titlebar_layout,
-};
 
 static const ZuiWidgetVTable window_vtable = {
   .layout = window_layout,
@@ -88,20 +125,51 @@ static void container_layout(ZuiWidget *widget)
   float available_w = widget->bounds.width - widget->padding * 2;
   float available_h = widget->bounds.height - widget->padding * 2;
 
-  if (widget->layout_dir == ZUI_LAYOUT_HORIZONTAL) {
-    float total_width = 0;
-    for (int i = 0; i < widget->child_count; i++) {
-      ZuiWidget *child = widget->children[i];
-      if (!child->visible) continue;
-      total_width += child->preferred_size.width;
-      if (i > 0) total_width += widget->spacing;
-    }
+  if (widget->child_count == 0) return;
 
+  for (int i = 0; i < widget->child_count; i++) {
+    ZuiWidget *child = widget->children[i];
+    if (widget->layout_dir == ZUI_LAYOUT_HORIZONTAL) {
+      if (child->fill_height) child->preferred_size.height = available_h;
+      if (child->fill_width) child->expand = true;
+    } else {
+      if (child->fill_width) child->preferred_size.width = available_w;
+      if (child->fill_height) child->expand = true;
+    }
+  }
+
+  float total_fixed = 0;
+  int expand_count = 0;
+  int visible_count = 0;
+
+  for (int i = 0; i < widget->child_count; i++) {
+    ZuiWidget *child = widget->children[i];
+    if (!child->visible) continue;
+    visible_count++;
+
+    if (widget->layout_dir == ZUI_LAYOUT_HORIZONTAL) {
+      if (child->expand) expand_count++;
+      else total_fixed += child->preferred_size.width;
+    } else {
+      if (child->expand) expand_count++;
+      else total_fixed += child->preferred_size.height;
+    }
+  }
+
+  float total_spacing = (visible_count > 1) ? widget->spacing * (float)(visible_count - 1) : 0;
+  float available = (widget->layout_dir == ZUI_LAYOUT_HORIZONTAL)
+    ? available_w - total_fixed - total_spacing
+    : available_h - total_fixed - total_spacing;
+
+  float expand_size = (expand_count > 0 && available > 0) ? available / (float)expand_count : 0;
+
+  if (widget->layout_dir == ZUI_LAYOUT_HORIZONTAL) {
+    float total_content = total_fixed + total_spacing + (expand_count > 0 ? expand_size * expand_count : 0);
     float start_x = x;
     if (widget->align == ZUI_ALIGN_CENTER) {
-      start_x = x + (available_w - total_width) / 2;
+      start_x = x + (available_w - total_content) / 2;
     } else if (widget->align == ZUI_ALIGN_END) {
-      start_x = x + available_w - total_width;
+      start_x = x + available_w - total_content;
     }
 
     float cx = start_x;
@@ -109,22 +177,32 @@ static void container_layout(ZuiWidget *widget)
       ZuiWidget *child = widget->children[i];
       if (!child->visible) continue;
 
-      float ch = child->expand ? available_h : child->preferred_size.height;
+      float cw = child->expand ? expand_size : child->preferred_size.width;
+      float ch = child->preferred_size.height;
       float cy = y + (available_h - ch) / 2;
 
-      zui_widget_set_bounds(child, cx, cy,
-                             child->preferred_size.width, ch);
-      cx += child->preferred_size.width + widget->spacing;
+      zui_widget_set_bounds(child, cx, cy, cw, ch);
+      cx += cw + widget->spacing;
     }
   } else {
-    float cy = y;
+    float total_content = total_fixed + total_spacing + (expand_count > 0 ? expand_size * expand_count : 0);
+    float start_y = y;
+    if (widget->align == ZUI_ALIGN_CENTER) {
+      start_y = y + (available_h - total_content) / 2;
+    } else if (widget->align == ZUI_ALIGN_END) {
+      start_y = y + available_h - total_content;
+    }
+
+    float cy = start_y;
     for (int i = 0; i < widget->child_count; i++) {
       ZuiWidget *child = widget->children[i];
       if (!child->visible) continue;
 
-      float cw = child->expand ? available_w : child->preferred_size.width;
-      zui_widget_set_bounds(child, x, cy, cw, child->preferred_size.height);
-      cy += child->preferred_size.height + widget->spacing;
+      float cw = child->preferred_size.width;
+      float ch = child->expand ? expand_size : child->preferred_size.height;
+
+      zui_widget_set_bounds(child, x, cy, cw, ch);
+      cy += ch + widget->spacing;
     }
   }
 }
@@ -133,88 +211,16 @@ static const ZuiWidgetVTable container_vtable = {
   .layout = container_layout,
 };
 
-static void titlebar_layout(ZuiWidget *widget)
-{
-  ZuiTitlebar *titlebar = (ZuiTitlebar *)widget;
-  float x = widget->bounds.x;
-  float y = widget->bounds.y;
-  float w = widget->bounds.width;
-  float h = widget->bounds.height;
-  float padding = widget->padding;
-
-  float start_w = 0, center_w = 0, end_w = 0;
-
-  if (titlebar->start_container) {
-    for (int i = 0; i < titlebar->start_container->child_count; i++) {
-      ZuiWidget *child = titlebar->start_container->children[i];
-      start_w += child->preferred_size.width;
-      if (i > 0) start_w += titlebar->start_container->spacing;
-    }
-    start_w += titlebar->start_container->padding * 2;
-  }
-
-  if (titlebar->center_container) {
-    for (int i = 0; i < titlebar->center_container->child_count; i++) {
-      ZuiWidget *child = titlebar->center_container->children[i];
-      center_w += child->preferred_size.width;
-      if (i > 0) center_w += titlebar->center_container->spacing;
-    }
-    center_w += titlebar->center_container->padding * 2;
-  }
-
-  if (titlebar->end_container) {
-    for (int i = 0; i < titlebar->end_container->child_count; i++) {
-      ZuiWidget *child = titlebar->end_container->children[i];
-      end_w += child->preferred_size.width;
-      if (i > 0) end_w += titlebar->end_container->spacing;
-    }
-    end_w += titlebar->end_container->padding * 2;
-  }
-
-  float max_side = start_w > end_w ? start_w : end_w;
-
-  if (titlebar->start_container) {
-    zui_widget_set_bounds((ZuiWidget *)titlebar->start_container,
-                           x + padding, y, start_w, h);
-    container_layout(titlebar->start_container);
-  }
-
-  if (titlebar->center_container) {
-    float center_x = x + (w - center_w) / 2;
-    float min_center_x = x + max_side + padding;
-    float max_center_x = x + w - max_side - center_w - padding;
-    if (center_x < min_center_x) center_x = min_center_x;
-    if (center_x > max_center_x) center_x = max_center_x;
-    zui_widget_set_bounds((ZuiWidget *)titlebar->center_container,
-                           center_x, y, center_w, h);
-    container_layout(titlebar->center_container);
-  }
-
-  if (titlebar->end_container) {
-    zui_widget_set_bounds((ZuiWidget *)titlebar->end_container,
-                           x + w - end_w - padding, y, end_w, h);
-    container_layout(titlebar->end_container);
-  }
-}
-
 static void window_layout(ZuiWidget *widget)
 {
   ZuiWindow *window = (ZuiWindow *)widget;
   float x = widget->bounds.x;
   float y = widget->bounds.y;
   float w = widget->bounds.width;
-
-  float titlebar_h = window->titlebar ? window->titlebar->height : 0;
-
-  if (window->titlebar) {
-    zui_widget_set_bounds((ZuiWidget *)window->titlebar, x, y, w, titlebar_h);
-    zui_widget_layout((ZuiWidget *)window->titlebar);
-  }
+  float h = widget->bounds.height;
 
   if (window->content) {
-    float content_y = y + titlebar_h;
-    float content_h = widget->bounds.height - titlebar_h;
-    zui_widget_set_bounds(window->content, x, content_y, w, content_h);
+    zui_widget_set_bounds(window->content, x, y, w, h);
     zui_widget_layout(window->content);
   }
 }
@@ -234,62 +240,91 @@ static ZuiWidget *create_container(void)
   return container;
 }
 
-ZuiTitlebar *zui_titlebar_create(float height)
+static void init_handler_list(ZuiWidget ***list, int *count, int *capacity)
 {
-  ZuiTitlebar *titlebar = (ZuiTitlebar *)zui_widget_create(
-    sizeof(ZuiTitlebar), ZUI_WIDGET_TITLEBAR, &titlebar_vtable);
-  if (!titlebar) return NULL;
+  *list = NULL;
+  *count = 0;
+  *capacity = 0;
+}
 
-  titlebar->height = height;
-  titlebar->base.padding = 2.0f;
-  titlebar->logo = NULL;
+static void free_handler_list(ZuiWidget **list)
+{
+  free(list);
+}
 
-  titlebar->start_container = create_container();
-  titlebar->center_container = create_container();
-  titlebar->end_container = create_container();
-
-  if (titlebar->start_container) {
-    titlebar->start_container->align = ZUI_ALIGN_START;
-    titlebar->start_container->padding = 4.0f;
-    zui_widget_add_child((ZuiWidget *)titlebar, titlebar->start_container);
-  }
-  if (titlebar->center_container) {
-    titlebar->center_container->align = ZUI_ALIGN_CENTER;
-    zui_widget_add_child((ZuiWidget *)titlebar, titlebar->center_container);
-  }
-  if (titlebar->end_container) {
-    titlebar->end_container->align = ZUI_ALIGN_END;
-    titlebar->end_container->padding = 4.0f;
-    zui_widget_add_child((ZuiWidget *)titlebar, titlebar->end_container);
+static bool add_handler(ZuiWidget ***list, int *count, int *capacity, ZuiWidget *widget)
+{
+  for (int i = 0; i < *count; i++) {
+    if ((*list)[i] == widget) return true;
   }
 
-  titlebar->logo = zui_image_create(ZUI_DEFAULT_LOGO_PATH);
-  if (titlebar->logo) {
-    zui_image_set_size(titlebar->logo, ZUI_DEFAULT_LOGO_SIZE, ZUI_DEFAULT_LOGO_SIZE);
-    if (titlebar->start_container) {
-      zui_widget_add_child(titlebar->start_container, zui_image_widget(titlebar->logo));
+  if (*count >= *capacity) {
+    int new_cap = *capacity == 0 ? ZUI_HANDLER_INITIAL_CAPACITY : *capacity * 2;
+    ZuiWidget **new_list = realloc(*list, (size_t)new_cap * sizeof(ZuiWidget *));
+    if (!new_list) return false;
+    *list = new_list;
+    *capacity = new_cap;
+  }
+
+  (*list)[*count] = widget;
+  (*count)++;
+  return true;
+}
+
+static void remove_handler(ZuiWidget **list, int *count, ZuiWidget *widget)
+{
+  for (int i = 0; i < *count; i++) {
+    if (list[i] == widget) {
+      for (int j = i; j < *count - 1; j++) {
+        list[j] = list[j + 1];
+      }
+      (*count)--;
+      return;
     }
   }
-
-  return titlebar;
 }
 
-void zui_titlebar_set_start(ZuiTitlebar *titlebar, ZuiWidget *widget)
+static bool is_widget_or_child_of(ZuiWidget *widget, ZuiWidget *target)
 {
-  if (!titlebar || !widget || !titlebar->start_container) return;
-  zui_widget_add_child(titlebar->start_container, widget);
+  if (widget == target) return true;
+  ZuiWidget *parent = widget->parent;
+  while (parent) {
+    if (parent == target) return true;
+    parent = parent->parent;
+  }
+  return false;
 }
 
-void zui_titlebar_set_center(ZuiTitlebar *titlebar, ZuiWidget *widget)
+static bool is_moving_handler(ZuiWindow *window, ZuiWidget *widget)
 {
-  if (!titlebar || !widget || !titlebar->center_container) return;
-  zui_widget_add_child(titlebar->center_container, widget);
+  for (int i = 0; i < window->moving_handler_count; i++) {
+    if (is_widget_or_child_of(widget, window->moving_handlers[i])) {
+      return true;
+    }
+  }
+  return false;
 }
 
-void zui_titlebar_set_end(ZuiTitlebar *titlebar, ZuiWidget *widget)
+static bool is_interactive_widget(ZuiWidget *widget)
 {
-  if (!titlebar || !widget || !titlebar->end_container) return;
-  zui_widget_add_child(titlebar->end_container, widget);
+  return widget->type == ZUI_WIDGET_BUTTON ||
+         widget->type == ZUI_WIDGET_TEXTINPUT ||
+         widget->type == ZUI_WIDGET_CHECKBOX ||
+         widget->type == ZUI_WIDGET_SLIDER ||
+         widget->type == ZUI_WIDGET_DROPDOWN;
+}
+
+static bool is_decoration_widget(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window->decoration || !widget) return false;
+  if (widget == window->decoration) return true;
+
+  ZuiWidget *parent = widget->parent;
+  while (parent) {
+    if (parent == window->decoration) return true;
+    parent = parent->parent;
+  }
+  return false;
 }
 
 ZuiWindow *zui_window_create(int width, int height, const char *title)
@@ -302,6 +337,8 @@ ZuiWindow *zui_window_create(int width, int height, const char *title)
   if (!window) return NULL;
 
   window->title = title ? strdup(title) : NULL;
+  window->x = 0;
+  window->y = 0;
   window->width = width;
   window->height = height;
   window->corner_radius = 12.0f;
@@ -316,6 +353,17 @@ ZuiWindow *zui_window_create(int width, int height, const char *title)
   window->background_color = ZUI_COLOR_HEX(0x242424);
   window->border_color = ZUI_COLOR_HEX(0x3d3d3d);
   window->border_width = 1.0f;
+
+  init_handler_list(&window->moving_handlers, &window->moving_handler_count,
+                    &window->moving_handler_capacity);
+  init_handler_list(&window->close_handlers, &window->close_handler_count,
+                    &window->close_handler_capacity);
+  init_handler_list(&window->maximize_handlers, &window->maximize_handler_count,
+                    &window->maximize_handler_capacity);
+  init_handler_list(&window->hide_handlers, &window->hide_handler_count,
+                    &window->hide_handler_capacity);
+  init_handler_list(&window->minimize_handlers, &window->minimize_handler_count,
+                    &window->minimize_handler_capacity);
 
   if (!zui_wayland_window_create(platform, &window->wayland, window,
                                   width, height, title ? title : "ZUI")) {
@@ -339,14 +387,6 @@ ZuiWindow *zui_window_create(int width, int height, const char *title)
   zui_egl_make_current(egl, &window->egl_surface);
   zui_init_renderer_if_needed();
 
-  window->titlebar = zui_titlebar_create(32.0f);
-  if (window->titlebar) {
-    window->titlebar->base.background = ZUI_COLOR(0, 0, 0, 0);
-    window->titlebar->base.corner_radius = window->corner_radius;
-    window->titlebar->base.corner_mode = ZUI_CORNERS_TOP;
-    zui_widget_add_child((ZuiWidget *)window, (ZuiWidget *)window->titlebar);
-  }
-
   window->content = create_container();
   if (window->content) {
     window->content->layout_dir = ZUI_LAYOUT_VERTICAL;
@@ -367,6 +407,12 @@ void zui_window_destroy(ZuiWindow *window)
 
   ZuiPlatform *platform = zui_get_platform();
   ZuiEglContext *egl = zui_get_egl();
+
+  free_handler_list(window->moving_handlers);
+  free_handler_list(window->close_handlers);
+  free_handler_list(window->maximize_handlers);
+  free_handler_list(window->hide_handlers);
+  free_handler_list(window->minimize_handlers);
 
   zui_egl_surface_destroy(egl, &window->egl_surface);
   zui_wayland_window_destroy(platform, &window->wayland);
@@ -395,8 +441,9 @@ void zui_window_render(ZuiWindow *window)
 
   zui_egl_make_current(egl, &window->egl_surface);
 
-  float radius = window->maximized ? 0 : window->corner_radius;
-  float border = window->maximized ? 0 : window->border_width;
+  bool no_frame = window->maximized || window->fullscreen;
+  float radius = no_frame ? 0 : window->corner_radius;
+  float border = no_frame ? 0 : window->border_width;
   float inset = border;
   float inner_radius = radius > inset ? radius - inset : 0;
 
@@ -408,7 +455,7 @@ void zui_window_render(ZuiWindow *window)
   zui_renderer_begin(renderer, window->width, window->height);
   zui_renderer_clear(renderer, ZUI_COLOR(0, 0, 0, 0));
 
-  if (border > 0 && !window->maximized) {
+  if (border > 0 && !no_frame) {
     zui_renderer_draw_rounded_rect_outline(renderer,
       ZUI_RECT(0, 0, (float)window->width, (float)window->height),
       window->border_color, radius, border);
@@ -427,6 +474,10 @@ void zui_window_render(ZuiWindow *window)
     window->background_color, inner_radius);
 
   zui_widget_draw((ZuiWidget *)window, renderer);
+
+  if (window->custom_draw) {
+    window->custom_draw(window, window->custom_draw_user_data);
+  }
 
   if (window->overlay && window->overlay->vtable &&
       window->overlay->vtable->draw_overlay) {
@@ -474,11 +525,6 @@ void zui_window_set_max_size(ZuiWindow *window, int width, int height)
   window->max_width = width;
   window->max_height = height;
   zui_wayland_set_max_size(&window->wayland, width, height);
-}
-
-ZuiTitlebar *zui_window_titlebar(ZuiWindow *window)
-{
-  return window ? window->titlebar : NULL;
 }
 
 ZuiWidget *zui_window_content(ZuiWindow *window)
@@ -587,25 +633,32 @@ void zui_window_handle_button(ZuiWindow *window, double x, double y,
     hit = zui_widget_hit_test((ZuiWidget *)window, (float)x, (float)y);
   }
 
-  if (pressed && button == BTN_LEFT) {
-    g_pressed_widget = hit;
+  if (pressed && (button == BTN_LEFT || button == BTN_RIGHT)) {
+    if (button == BTN_LEFT) {
+      g_pressed_widget = hit;
+    }
+
+    if (button == BTN_RIGHT && is_decoration_widget(window, hit)) {
+      ZuiPlatform *platform = zui_get_platform();
+      zui_wayland_show_window_menu(platform, &window->wayland, (int)x, (int)y);
+      return;
+    }
 
     if (hit && hit->vtable && hit->vtable->on_mouse_down) {
       hit->vtable->on_mouse_down(hit, (float)x, (float)y, button);
     }
 
-    if (hit) {
+    if (hit && button == BTN_LEFT) {
       hit->pressed = true;
       window->needs_redraw = true;
     }
 
-    if (hit && (hit->type == ZUI_WIDGET_TITLEBAR ||
-                (hit->parent && hit->parent->type == ZUI_WIDGET_TITLEBAR))) {
-      bool on_interactive = (hit->type == ZUI_WIDGET_BUTTON);
-      if (!on_interactive && hit->parent) {
+    if (hit && button == BTN_LEFT && is_moving_handler(window, hit)) {
+      bool on_interactive = is_interactive_widget(hit);
+      if (!on_interactive) {
         ZuiWidget *p = hit->parent;
-        while (p && p->type != ZUI_WIDGET_TITLEBAR) {
-          if (p->type == ZUI_WIDGET_BUTTON) {
+        while (p) {
+          if (is_interactive_widget(p)) {
             on_interactive = true;
             break;
           }
@@ -614,8 +667,12 @@ void zui_window_handle_button(ZuiWindow *window, double x, double y,
       }
 
       if (!on_interactive) {
-        ZuiPlatform *platform = zui_get_platform();
-        zui_wayland_start_move(platform, &window->wayland);
+        if (is_double_click(window, x, y)) {
+          zui_window_maximize(window);
+        } else {
+          ZuiPlatform *platform = zui_get_platform();
+          zui_wayland_start_move(platform, &window->wayland);
+        }
       }
     }
   } else if (!pressed && button == BTN_LEFT) {
@@ -676,11 +733,38 @@ void zui_window_set_maximized_state(ZuiWindow *window, bool maximized)
 {
   if (window) {
     window->maximized = maximized;
-    if (window->titlebar) {
-      window->titlebar->base.corner_mode = maximized ? ZUI_CORNERS_NONE : ZUI_CORNERS_TOP;
-    }
     window->needs_redraw = true;
   }
+}
+
+void zui_window_set_fullscreen_state(ZuiWindow *window, bool fullscreen)
+{
+  if (!window) return;
+
+  bool was_fullscreen = window->fullscreen;
+  window->fullscreen = fullscreen;
+
+  if (fullscreen != was_fullscreen) {
+    window->base.corner_mode = fullscreen ? ZUI_CORNERS_NONE : ZUI_CORNERS_ALL;
+
+    if (window->decoration) {
+      window->decoration->visible = !fullscreen && window->decorated;
+    }
+
+    window->needs_redraw = true;
+  }
+}
+
+void zui_window_set_decorated_state(ZuiWindow *window, bool decorated)
+{
+  if (!window) return;
+  window->decorated = decorated;
+
+  if (window->decoration) {
+    window->decoration->visible = decorated;
+  }
+
+  window->needs_redraw = true;
 }
 
 void zui_window_set_active_state(ZuiWindow *window, bool active)
@@ -708,7 +792,9 @@ void zui_window_clear_overlay(ZuiWindow *window, ZuiWidget *widget)
 
 void zui_window_minimize(ZuiWindow *window)
 {
-  if (window) zui_wayland_minimize(&window->wayland);
+  if (!window) return;
+  window->minimized = true;
+  zui_wayland_minimize(&window->wayland);
 }
 
 void zui_window_maximize(ZuiWindow *window)
@@ -721,6 +807,13 @@ void zui_window_maximize(ZuiWindow *window)
   }
 }
 
+void zui_window_hide(ZuiWindow *window)
+{
+  if (!window) return;
+  window->hidden = true;
+  zui_wayland_minimize(&window->wayland);
+}
+
 void zui_window_close(ZuiWindow *window)
 {
   if (window) window->running = false;
@@ -731,71 +824,14 @@ bool zui_window_is_maximized(ZuiWindow *window)
   return window ? window->maximized : false;
 }
 
-void zui_window_set_logo(ZuiWindow *window, const char *path)
+bool zui_window_is_minimized(ZuiWindow *window)
 {
-  if (!window || !window->titlebar) return;
-
-  ZuiTitlebar *titlebar = window->titlebar;
-
-  if (titlebar->logo) {
-    zui_widget_remove_child(titlebar->start_container,
-                             zui_image_widget(titlebar->logo));
-    zui_image_destroy(titlebar->logo);
-    titlebar->logo = NULL;
-  }
-
-  if (path) {
-    titlebar->logo = zui_image_create(path);
-    if (titlebar->logo) {
-      zui_image_set_size(titlebar->logo, ZUI_DEFAULT_LOGO_SIZE, ZUI_DEFAULT_LOGO_SIZE);
-      if (titlebar->start_container) {
-        ZuiWidget *logo_widget = zui_image_widget(titlebar->logo);
-        if (titlebar->start_container->child_count > 0) {
-          for (int i = titlebar->start_container->child_count - 1; i >= 0; i--) {
-            titlebar->start_container->children[i + 1] =
-              titlebar->start_container->children[i];
-          }
-          titlebar->start_container->children[0] = logo_widget;
-          logo_widget->parent = titlebar->start_container;
-          titlebar->start_container->child_count++;
-        } else {
-          zui_widget_add_child(titlebar->start_container, logo_widget);
-        }
-      }
-    }
-  }
-
-  window->needs_redraw = true;
+  return window ? window->minimized : false;
 }
 
-void zui_window_set_logo_size(ZuiWindow *window, float width, float height)
+bool zui_window_is_hidden(ZuiWindow *window)
 {
-  if (!window || !window->titlebar || !window->titlebar->logo) return;
-  zui_image_set_size(window->titlebar->logo, width, height);
-  window->needs_redraw = true;
-}
-
-void zui_window_set_logo_visible(ZuiWindow *window, bool visible)
-{
-  if (!window || !window->titlebar || !window->titlebar->logo) return;
-  zui_image_set_visible(window->titlebar->logo, visible);
-  window->needs_redraw = true;
-}
-
-void zui_window_remove_logo(ZuiWindow *window)
-{
-  if (!window || !window->titlebar) return;
-
-  ZuiTitlebar *titlebar = window->titlebar;
-
-  if (titlebar->logo) {
-    zui_widget_remove_child(titlebar->start_container,
-                             zui_image_widget(titlebar->logo));
-    zui_image_destroy(titlebar->logo);
-    titlebar->logo = NULL;
-  }
-
-  window->needs_redraw = true;
+  return window ? window->hidden : false;
 }
 
 void zui_window_set_background_color(ZuiWindow *window, ZuiColor color)
@@ -812,7 +848,158 @@ void zui_window_set_border_color(ZuiWindow *window, ZuiColor color)
   window->needs_redraw = true;
 }
 
+void zui_window_get_size(ZuiWindow *window, int *width, int *height)
+{
+  if (!window) return;
+  if (width) *width = window->width;
+  if (height) *height = window->height;
+}
+
+void zui_window_set_position(ZuiWindow *window, int x, int y)
+{
+  if (!window) return;
+  window->x = x;
+  window->y = y;
+}
+
+void zui_window_get_position(ZuiWindow *window, int *x, int *y)
+{
+  if (!window) return;
+  if (x) *x = window->x;
+  if (y) *y = window->y;
+}
+
 bool zui_window_is_active(ZuiWindow *window)
 {
   return window ? window->active : false;
+}
+
+void zui_window_show_menu(ZuiWindow *window, int x, int y)
+{
+  if (!window) return;
+  ZuiPlatform *platform = zui_get_platform();
+  zui_wayland_show_window_menu(platform, &window->wayland, x, y);
+}
+
+void zui_window_set_fullscreen(ZuiWindow *window, bool fullscreen)
+{
+  if (!window) return;
+  window->fullscreen = fullscreen;
+  zui_wayland_set_fullscreen(&window->wayland, fullscreen);
+}
+
+bool zui_window_is_fullscreen(ZuiWindow *window)
+{
+  return window ? window->fullscreen : false;
+}
+
+void zui_window_set_decorated(ZuiWindow *window, bool decorated)
+{
+  if (!window) return;
+  window->decorated = decorated;
+  ZuiPlatform *platform = zui_get_platform();
+  zui_wayland_set_decorated(platform, &window->wayland, decorated);
+}
+
+bool zui_window_is_decorated(ZuiWindow *window)
+{
+  return window ? window->decorated : true;
+}
+
+void zui_add_window_moving_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  add_handler(&window->moving_handlers, &window->moving_handler_count,
+              &window->moving_handler_capacity, widget);
+}
+
+void zui_remove_window_moving_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  remove_handler(window->moving_handlers, &window->moving_handler_count, widget);
+}
+
+void zui_add_close_window_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  add_handler(&window->close_handlers, &window->close_handler_count,
+              &window->close_handler_capacity, widget);
+}
+
+void zui_remove_close_window_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  remove_handler(window->close_handlers, &window->close_handler_count, widget);
+}
+
+void zui_add_window_maximize_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  add_handler(&window->maximize_handlers, &window->maximize_handler_count,
+              &window->maximize_handler_capacity, widget);
+}
+
+void zui_remove_window_maximize_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  remove_handler(window->maximize_handlers, &window->maximize_handler_count, widget);
+}
+
+void zui_add_hide_window_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  add_handler(&window->hide_handlers, &window->hide_handler_count,
+              &window->hide_handler_capacity, widget);
+}
+
+void zui_remove_hide_window_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  remove_handler(window->hide_handlers, &window->hide_handler_count, widget);
+}
+
+void zui_add_minimize_window_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  add_handler(&window->minimize_handlers, &window->minimize_handler_count,
+              &window->minimize_handler_capacity, widget);
+}
+
+void zui_remove_minimize_window_handler(ZuiWindow *window, ZuiWidget *widget)
+{
+  if (!window || !widget) return;
+  remove_handler(window->minimize_handlers, &window->minimize_handler_count, widget);
+}
+
+void zui_set_window_decoration(ZuiWindow *window, ZuiWidget *decoration)
+{
+  if (!window) return;
+  window->decoration = decoration;
+}
+
+ZuiWidget *zui_get_window_decoration(ZuiWindow *window)
+{
+  return window ? window->decoration : NULL;
+}
+
+void zui_window_decoration_set_visible(ZuiWindow *window, bool visible)
+{
+  if (!window || !window->decoration) return;
+  window->decoration->visible = visible;
+  window->needs_redraw = true;
+}
+
+bool zui_window_decoration_is_visible(ZuiWindow *window)
+{
+  if (!window || !window->decoration) return false;
+  return window->decoration->visible;
+}
+
+void zui_window_set_custom_draw(ZuiWindow *window,
+                                 void (*callback)(ZuiWindow *window, void *user_data),
+                                 void *user_data)
+{
+  if (!window) return;
+  window->custom_draw = callback;
+  window->custom_draw_user_data = user_data;
 }

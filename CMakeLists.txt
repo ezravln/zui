@@ -44,6 +44,9 @@ find_package(OpenGL REQUIRED COMPONENTS OpenGL)
 pkg_check_modules(MPV QUIET mpv)
 option(ZUI_VIDEO_MPV "Build libmpv video backend" ${MPV_FOUND})
 
+# WebP support
+pkg_check_modules(WEBP REQUIRED libwebp)
+
 # GLAD (vendored OpenGL/EGL loader)
 add_library(glad STATIC
   external/glad/src/glad.c
@@ -59,11 +62,38 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(glad PRIVATE -w)
 endif()
 
+# Find Python for resource compiler
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+# Generate internal resources for library
+set(ZUI_INTERNAL_RES_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/zui_internal")
+set(ZUI_INTERNAL_RES_H "${ZUI_INTERNAL_RES_DIR}/zui_internal_resources.h")
+set(ZUI_INTERNAL_RES_C "${ZUI_INTERNAL_RES_DIR}/zui_internal_resources.c")
+
+add_custom_command(
+  OUTPUT ${ZUI_INTERNAL_RES_H} ${ZUI_INTERNAL_RES_C}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${ZUI_INTERNAL_RES_DIR}
+  COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/rescompile.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/internal_resources.res
+    -o zui_internal_resources
+    -d ${ZUI_INTERNAL_RES_DIR}
+    -p zui_internal
+  DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/internal_resources.res
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/rescompile.py
+  COMMENT "Compiling ZUI internal resources"
+  VERBATIM
+)
+
+add_custom_target(zui_internal_resources DEPENDS ${ZUI_INTERNAL_RES_H} ${ZUI_INTERNAL_RES_C})
+
 # ZUI library
 add_library(zui STATIC
   # Core
   src/core/app.c
   src/core/window.c
+  src/core/window_decoration.c
   src/core/widget.c
   src/core/widgets.c
   src/core/layout.c
@@ -71,6 +101,9 @@ add_library(zui STATIC
   src/core/font.c
   src/core/image.c
   src/core/panel.c
+  src/core/path.c
+  src/core/shape.c
+  src/core/resource.c
 
   # Platform - Wayland
   src/platform/wayland/wayland_platform.c
@@ -84,7 +117,15 @@ add_library(zui STATIC
   # Video
   src/core/video.c
   src/video/video_backend.c
+
+  # Audio
+  src/audio/audio.c
+
+  # Generated internal resources
+  ${ZUI_INTERNAL_RES_C}
 )
+
+add_dependencies(zui zui_internal_resources)
 
 # Video backends
 if(ZUI_VIDEO_MPV)
@@ -101,9 +142,12 @@ target_include_directories(zui
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio
+    ${ZUI_INTERNAL_RES_DIR}
     ${WAYLAND_INCLUDE_DIRS}
     ${EGL_INCLUDE_DIRS}
     ${XKB_INCLUDE_DIRS}
+    ${WEBP_INCLUDE_DIRS}
 )
 
 target_link_libraries(zui
@@ -113,8 +157,11 @@ target_link_libraries(zui
     ${WAYLAND_LIBRARIES}
     ${EGL_LIBRARIES}
     ${XKB_LIBRARIES}
+    ${WEBP_LIBRARIES}
     OpenGL::OpenGL
     m
+    pthread
+    dl
 )
 
 target_compile_definitions(zui PRIVATE
@@ -130,6 +177,9 @@ set_source_files_properties(src/core/font.c PROPERTIES
 )
 set_source_files_properties(src/core/image.c PROPERTIES
   COMPILE_FLAGS "-Wno-sign-conversion -Wno-conversion -Wno-double-promotion -Wno-shadow -Wno-sign-compare -Wno-unused-function"
+)
+set_source_files_properties(src/audio/audio.c PROPERTIES
+  COMPILE_FLAGS "-Wno-sign-conversion -Wno-conversion -Wno-double-promotion -Wno-shadow -Wno-sign-compare -Wno-unused-function -Wno-pedantic"
 )
 
 # Copy shader files to build directory
@@ -154,8 +204,39 @@ add_custom_target(copy_assets ALL
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/video"
     "${CMAKE_CURRENT_BINARY_DIR}/assets/video"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/assets/audio"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/audio"
+    "${CMAKE_CURRENT_BINARY_DIR}/assets/audio"
   COMMENT "Copying asset files"
 )
+
+# Resource compiler function for applications
+function(zui_compile_resources TARGET RES_FILE)
+  get_filename_component(RES_NAME ${RES_FILE} NAME_WE)
+  get_filename_component(RES_DIR ${RES_FILE} DIRECTORY)
+
+  set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/${TARGET}")
+  set(GEN_HEADER "${GEN_DIR}/app_resources.h")
+  set(GEN_SOURCE "${GEN_DIR}/app_resources.c")
+
+  add_custom_command(
+    OUTPUT ${GEN_HEADER} ${GEN_SOURCE}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${GEN_DIR}
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tools/rescompile.py
+      ${RES_FILE}
+      -o app_resources
+      -d ${GEN_DIR}
+      -p zui_app
+    DEPENDS ${RES_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/rescompile.py
+    COMMENT "Compiling resources: ${RES_FILE}"
+    VERBATIM
+  )
+
+  target_sources(${TARGET} PRIVATE ${GEN_SOURCE})
+  target_include_directories(${TARGET} PRIVATE ${GEN_DIR})
+endfunction()
 
 # Examples
 option(ZUI_BUILD_EXAMPLES "Build example applications" ON)
@@ -164,6 +245,12 @@ if(ZUI_BUILD_EXAMPLES)
   add_executable(zui_example examples/main.c)
   target_link_libraries(zui_example PRIVATE zui)
   add_dependencies(zui_example copy_assets)
+
+  # Compile embedded resources
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/resources.res")
+    zui_compile_resources(zui_example "${CMAKE_CURRENT_SOURCE_DIR}/examples/resources.res")
+  endif()
+
 endif()
 
 # Summary

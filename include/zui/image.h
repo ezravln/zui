@@ -6,6 +6,7 @@
 typedef struct ZuiImage ZuiImage;
 typedef struct ZuiWidget ZuiWidget;
 
+ZuiWidget *zui_image_new(const char *path);
 ZuiImage *zui_image_create(const char *path);
 ZuiImage *zui_image_create_from_memory(const unsigned char *data, int len);
 void zui_image_destroy(ZuiImage *image);
@@ -13,6 +14,8 @@ void zui_image_destroy(ZuiImage *image);
 void zui_image_set_size(ZuiImage *image, float width, float height);
 void zui_image_set_visible(ZuiImage *image, bool visible);
 
-ZuiWidget *zui_image_widget(ZuiImage *image);
+ZuiWidget *zui_image_as_widget(ZuiImage *image);
+
+#define zui_image_widget zui_image_as_widget
 
 #endif

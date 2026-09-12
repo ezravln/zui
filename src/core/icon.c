@@ -158,6 +158,11 @@ void zui_icon_set_color(ZuiIcon *icon, ZuiColor color)
   icon->tint = color;
 }
 
+ZuiWidget *zui_icon_as_widget(ZuiIcon *icon)
+{
+  return (ZuiWidget *)icon;
+}
+
 void zui_icon_rasterize(ZuiIcon *icon)
 {
   if (!icon || !icon->source) return;
