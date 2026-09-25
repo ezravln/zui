@@ -165,7 +165,7 @@ static void container_layout(ZuiWidget *widget)
   float expand_size = (expand_count > 0 && available > 0) ? available / (float)expand_count : 0;
 
   if (widget->layout_dir == ZUI_LAYOUT_HORIZONTAL) {
-    float total_content = total_fixed + total_spacing + (expand_count > 0 ? expand_size * expand_count : 0);
+    float total_content = total_fixed + total_spacing + (expand_count > 0 ? expand_size * (float)expand_count : 0);
     float start_x = x;
     if (widget->align == ZUI_ALIGN_CENTER) {
       start_x = x + (available_w - total_content) / 2;
@@ -186,7 +186,7 @@ static void container_layout(ZuiWidget *widget)
       cx += cw + widget->spacing;
     }
   } else {
-    float total_content = total_fixed + total_spacing + (expand_count > 0 ? expand_size * expand_count : 0);
+    float total_content = total_fixed + total_spacing + (expand_count > 0 ? expand_size * (float)expand_count : 0);
     float start_y = y;
     if (widget->align == ZUI_ALIGN_CENTER) {
       start_y = y + (available_h - total_content) / 2;

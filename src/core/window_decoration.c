@@ -203,7 +203,7 @@ ZuiWindowDecoration *zui_default_window_decoration(ZuiWindow *window)
     return NULL;
   }
 
-  decor->container->background = ZUI_COLOR_HEX(0x141726);
+  decor->container->background = ZUI_COLOR_HEX(0x222222);
   decor->container->padding = WINDOW_DECORATION_PADDING;
   decor->container->preferred_size.height = WINDOW_DECORATION_HEIGHT;
   decor->container->fill_width = true;

@@ -10,7 +10,7 @@ int main(void) {
   }
 
   ZuiWindow* window = zui_window_create(800, 600, "Zui Examples");
-  zui_window_set_background_color(window, ZUI_COLOR_HEX(0xffffff));
+  zui_window_set_background_color(window, ZUI_COLOR_HEX(0x121212));
 
   ZuiWindowDecoration* decoration = zui_default_window_decoration(window);
   zui_window_decoration_set_title(decoration, "Zui Examples");
