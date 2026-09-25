@@ -129,7 +129,7 @@ add_library(zui STATIC
 
   # Renderer - OpenGL
   src/renderer/opengl/egl_context.c
-  src/renderer/opengl/renderer.c
+  src/renderer/renderer.c
 
   # Video
   src/core/video.c
